@@ -15,7 +15,7 @@ import {
 import { useAppStore } from "@/lib/placepro/store";
 import { api } from "@/lib/placepro/api";
 import { skillName } from "@/lib/placepro/skill-taxonomy";
-import type { Company, MatchResult, Student } from "@/types";
+import type { Company, MatchResult, Skill, Student } from "@/types";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { MiniBar, PRBadge, ScorePill, StatusBadge } from "@/components/placepro/shared/badges";
 import { FilterSelect, SearchInput } from "@/components/placepro/shared/controls";
@@ -73,7 +73,7 @@ function fromCompany(company: Company): CriteriaState {
   return {
     minCgpa: company.minCgpa,
     criteria: company.criteria.map((c) => ({
-      skillId: c.skillId,
+      skillId: c.type === "PROJECT_SCORE" ? "PROJECT_SCORE" : c.skillId,
       minCutoff: c.minCutoff,
       weightage: c.weightage,
       mandatory: c.mandatory,
@@ -83,6 +83,14 @@ function fromCompany(company: Company): CriteriaState {
 
 function cloneState(state: CriteriaState): CriteriaState {
   return { minCgpa: state.minCgpa, criteria: state.criteria.map((c) => ({ ...c })) };
+}
+
+function criterionName(skills: Skill[], skillId: string) {
+  return skillId === "PROJECT_SCORE" ? "Verified project score" : skillName(skills, skillId);
+}
+
+function criterionScore(student: Student, skillId: string) {
+  return skillId === "PROJECT_SCORE" ? student.projectScore ?? 0 : student.scores[skillId] ?? 0;
 }
 
 const csvEscape = (v: string | number) => {
@@ -332,9 +340,7 @@ export default function CompanyMatchingPage() {
     const rows = eligibleResults.filter((r) => selected.has(r.student.id));
     if (rows.length === 0) return;
 
-    const skillNames = applied.criteria.map(
-      (c) => skillName(skills, c.skillId),
-    );
+    const skillNames = applied.criteria.map((c) => criterionName(skills, c.skillId));
     const header = [
       "Rank",
       "Roll Number",
@@ -350,7 +356,7 @@ export default function CompanyMatchingPage() {
         r.student.rollNumber,
         r.student.name,
         r.student.cgpa.toFixed(1),
-        ...applied.criteria.map((c) => String(r.student.scores[c.skillId] ?? 0)),
+        ...applied.criteria.map((c) => String(criterionScore(r.student, c.skillId))),
         r.compatibility.toFixed(1),
       ]),
     ];
@@ -481,7 +487,7 @@ export default function CompanyMatchingPage() {
               </thead>
               <tbody>
                 {draft.criteria.map((c, i) => {
-                  const sName = skillName(skills, c.skillId);
+                  const sName = criterionName(skills, c.skillId);
                   return (
                     <tr key={c.skillId} className="border-b border-border/50 last:border-0">
                       <td className="relative py-2.5 pl-5 pr-2">
@@ -538,7 +544,7 @@ export default function CompanyMatchingPage() {
                                 });
                               }
                             }}
-                            aria-label={`${skillName} weightage percent`}
+                            aria-label={`${sName} weightage percent`}
                             className="h-8 w-20 text-[13px] tabular"
                           />
                           <span className="text-xs text-muted-foreground">%</span>
@@ -548,7 +554,7 @@ export default function CompanyMatchingPage() {
                         <Switch
                           checked={c.mandatory}
                           onCheckedChange={(on) => updateCriterion(i, { mandatory: on })}
-                          aria-label={`${skillName} mandatory toggle`}
+                          aria-label={`${sName} mandatory toggle`}
                         />
                       </td>
                     </tr>
@@ -799,7 +805,7 @@ export default function CompanyMatchingPage() {
                     {applied.criteria.map((c) => (
                       <th key={c.skillId} className="px-2 py-2.5 font-medium">
                         <span className="inline-flex items-center gap-1">
-                          {skillName(skills, c.skillId)}
+                          {criterionName(skills, c.skillId)}
                           {c.mandatory ? (
                             <span
                               className="inline-block size-1.5 rounded-full bg-warning"
@@ -868,7 +874,7 @@ export default function CompanyMatchingPage() {
                           {r.student.cgpa.toFixed(1)}
                         </td>
                         {applied.criteria.map((c) => {
-                          const score = r.student.scores[c.skillId] ?? 0;
+                          const score = criterionScore(r.student, c.skillId);
                           const below = score < c.minCutoff;
                           return (
                             <td key={c.skillId} className="px-2 py-2.5">

@@ -1,5 +1,3 @@
-"use strict";
-
 function errorDetails(error) {
   if (!error) return undefined;
   return {

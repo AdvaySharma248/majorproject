@@ -2,8 +2,41 @@ const PR_THRESHOLDS = {
   minAverage: 68,
   minCgpa: 6.6,
   minComm: 58,
+  minProjectScore: 60,
   commSkillCode: "comm",
 };
+
+async function getStudentProjectScore(db, studentId) {
+  const { rows } = await db.query(
+    `SELECT ROUND(AVG(latest.final_score), 2) AS project_score,
+            COUNT(*)::int AS approved_project_count
+     FROM projects p
+     JOIN LATERAL (
+       SELECT final_score
+       FROM project_score_snapshots
+       WHERE project_id = p.project_id AND final_score IS NOT NULL
+       ORDER BY computed_at DESC, project_score_snapshot_id DESC
+       LIMIT 1
+     ) latest ON TRUE
+     JOIN LATERAL (
+       SELECT review_status
+       FROM project_reviews
+       WHERE project_id = p.project_id
+       ORDER BY created_at DESC, project_review_id DESC
+       LIMIT 1
+     ) review ON TRUE
+     WHERE p.student_id = $1
+       AND p.ownership_status = 'VERIFIED'
+       AND review.review_status = 'APPROVED'`,
+    [studentId]
+  );
+  return {
+    projectScore: rows[0]?.project_score === null || rows[0]?.project_score === undefined
+      ? null
+      : Number(rows[0].project_score),
+    approvedProjectCount: Number(rows[0]?.approved_project_count || 0),
+  };
+}
 
 async function recomputeAndSyncStudentReadiness(db, studentId) {
   const studentRes = await db.query(
@@ -32,10 +65,13 @@ async function recomputeAndSyncStudentReadiness(db, studentId) {
     ? Number((skillValues.reduce((a, b) => a + b, 0) / skillValues.length).toFixed(1))
     : 0;
   const commScore = scores[PR_THRESHOLDS.commSkillCode] ?? 0;
+  const { projectScore } = await getStudentProjectScore(db, studentId);
   const prStatus =
     average >= PR_THRESHOLDS.minAverage &&
     cgpa >= PR_THRESHOLDS.minCgpa &&
-    commScore >= PR_THRESHOLDS.minComm
+    commScore >= PR_THRESHOLDS.minComm &&
+    projectScore !== null &&
+    projectScore >= PR_THRESHOLDS.minProjectScore
       ? "PR"
       : "NPR";
 
@@ -49,6 +85,7 @@ async function recomputeAndSyncStudentReadiness(db, studentId) {
 
 async function buildStudentResponseObject(db, studentRow) {
   const studentId = studentRow.student_id;
+  const projectScoreData = await getStudentProjectScore(db, studentId);
   const ratingsRes = await db.query(
     `SELECT st.skill_id, st.skill_code, st.domain_category,
             ROUND(AVG(sr.score_percentage), 1) AS avg_score
@@ -95,12 +132,15 @@ async function buildStudentResponseObject(db, studentRow) {
     domainAverages,
     average: Number(studentRow.average_score),
     prStatus: studentRow.readiness_status,
+    projectScore: projectScoreData.projectScore,
+    approvedProjectCount: projectScoreData.approvedProjectCount,
     trend: trendRes.rows.map((r) => Number(r.overall_score_pct)),
   };
 }
 
 module.exports = {
   PR_THRESHOLDS,
+  getStudentProjectScore,
   recomputeAndSyncStudentReadiness,
   buildStudentResponseObject,
 };

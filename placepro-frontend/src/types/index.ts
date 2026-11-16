@@ -44,6 +44,8 @@ export interface Student {
   domainAverages?: Record<string, number>;
   average: number;
   prStatus: PRStatus;
+  projectScore?: number | null;
+  approvedProjectCount?: number;
   /** chronological average % across recent assessments */
   trend: number[];
 }
@@ -106,6 +108,7 @@ export interface TrainerFeedback {
 
 export interface CompanyCriterion {
   skillId: string;
+  type?: "PROJECT_SCORE";
   minCutoff: number;
   weightage: number; // 0 - 1
   mandatory: boolean;
@@ -187,6 +190,7 @@ export type Page =
   | "my-performance"
   | "my-feedback"
   | "my-profile"
+  | "profile-intelligence"
   | "users"
   | "batches"
   | "skills"

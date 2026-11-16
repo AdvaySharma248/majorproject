@@ -80,6 +80,7 @@ export default function CompanyRequirementsPage() {
   const totalWeight = form.criteria.reduce((a, c) => a + (Number.isFinite(c.weightage) ? c.weightage : 0), 0);
 
   function skillName(skillId: string) {
+    if (skillId === "PROJECT_SCORE") return "Verified project score";
     return skills.find((s) => s.id === skillId)?.name ?? "Unknown skill";
   }
 
@@ -90,7 +91,7 @@ export default function CompanyRequirementsPage() {
       industry: c.industry,
       minCgpa: c.minCgpa,
       criteria: c.criteria.map((cr) => ({
-        skillId: cr.skillId,
+        skillId: cr.type === "PROJECT_SCORE" ? "PROJECT_SCORE" : cr.skillId,
         minCutoff: cr.minCutoff,
         weightage: Math.round(cr.weightage * 100),
         mandatory: cr.mandatory,
@@ -134,6 +135,15 @@ export default function CompanyRequirementsPage() {
     }));
   }
 
+  function addProjectScoreRow() {
+    setForm((f) => ({
+      ...f,
+      criteria: f.criteria.some((row) => row.skillId === "PROJECT_SCORE")
+        ? f.criteria
+        : [...f.criteria, { skillId: "PROJECT_SCORE", minCutoff: 60, weightage: 0, mandatory: false }],
+    }));
+  }
+
   function saveCompany() {
     const next: { name?: string; role?: string } = {};
     if (!form.name.trim()) next.name = "Company name is required.";
@@ -146,6 +156,7 @@ export default function CompanyRequirementsPage() {
       .filter((r) => r.skillId)
       .map((r) => ({
         skillId: r.skillId,
+        ...(r.skillId === "PROJECT_SCORE" ? { type: "PROJECT_SCORE" as const } : {}),
         minCutoff: Number.isFinite(r.minCutoff) ? r.minCutoff : 60,
         weightage: (Number.isFinite(r.weightage) ? r.weightage : 0) / 100,
         mandatory: r.mandatory,
@@ -185,21 +196,31 @@ export default function CompanyRequirementsPage() {
     <div className="grid gap-2">
       <div className="flex items-center justify-between">
         <Label>Eligibility criteria</Label>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 text-[13px]"
-          onClick={addRow}
-          disabled={!numericSkills.length}
-        >
-          <Plus className="size-3.5" /> Add criterion
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-[13px]"
+            onClick={addProjectScoreRow}
+            disabled={form.criteria.some((row) => row.skillId === "PROJECT_SCORE")}
+          >
+            <Plus className="size-3.5" /> Add project score
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-[13px]"
+            onClick={addRow}
+            disabled={!numericSkills.length}
+          >
+            <Plus className="size-3.5" /> Add skill
+          </Button>
+        </div>
       </div>
-      {numericSkills.length ? (
-        form.criteria.length ? (
+      {form.criteria.length ? (
           <>
             <div className="hidden text-[11px] font-medium uppercase tracking-wide text-muted-foreground sm:grid sm:grid-cols-[1fr_5rem_5.5rem_4.5rem_2rem] sm:gap-2 sm:px-1">
-              <span>Skill</span>
+              <span>Skill / criterion</span>
               <span>Cutoff</span>
               <span>Weight %</span>
               <span className="text-center">Mandatory</span>
@@ -211,18 +232,26 @@ export default function CompanyRequirementsPage() {
                   key={i}
                   className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2 sm:grid sm:grid-cols-[1fr_5rem_5.5rem_4.5rem_2rem] sm:items-center sm:gap-2"
                 >
-                  <Select value={row.skillId} onValueChange={(v) => updateRow(i, { skillId: v })}>
-                    <SelectTrigger className="h-8 w-full flex-1 text-[13px]">
-                      <SelectValue placeholder="Select skill" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {numericSkills.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {row.skillId === "PROJECT_SCORE" ? (
+                    <span className="min-w-0 flex-1 px-2 text-[13px] font-medium text-foreground">
+                      Verified project score
+                    </span>
+                  ) : numericSkills.length ? (
+                    <Select value={row.skillId} onValueChange={(v) => updateRow(i, { skillId: v })}>
+                      <SelectTrigger className="h-8 w-full flex-1 text-[13px]">
+                        <SelectValue placeholder="Select skill" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {numericSkills.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="min-w-0 flex-1 px-2 text-[13px] text-muted-foreground">No active numeric skills</span>
+                  )}
                   <Input
                     type="number"
                     min={0}
@@ -273,14 +302,9 @@ export default function CompanyRequirementsPage() {
               Total weightage: {totalWeight}%{totalWeight !== 100 ? " — should add up to 100% for accurate matching." : " — balanced."}
             </div>
           </>
-        ) : (
-          <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted-foreground">
-            No criteria yet — add at least one criterion to drive eligibility matching.
-          </p>
-        )
       ) : (
         <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted-foreground">
-          No active numeric parameters available. Create parameters first in Skills &amp; Parameters.
+          No criteria yet — add a skill or project-score requirement to drive eligibility matching.
         </p>
       )}
     </div>

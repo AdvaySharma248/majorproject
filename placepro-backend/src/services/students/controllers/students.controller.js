@@ -2,8 +2,13 @@ const { Router } = require("express");
 const { pool } = require("../../../config/db");
 const { buildStudentResponseObject } = require("../../../utils/student-metrics");
 const { requireAuth, requireRole } = require("../../../middleware/auth.middleware");
+const profileIntelligenceRouter = require("./profile-intelligence.controller");
+const projectsRouter = require("./projects.controller");
 
 const router = Router();
+
+router.use(profileIntelligenceRouter);
+router.use(projectsRouter);
 
 router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {

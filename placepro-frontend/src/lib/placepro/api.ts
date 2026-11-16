@@ -59,6 +59,73 @@ export type StudentAssessment = {
   percentage: number;
 };
 
+export type ProfilePlatform = "GITHUB";
+
+export type ProfileChallenge = {
+  token: string;
+  instructions: string;
+  expiresInMinutes: number;
+};
+
+export type StudentCodingProfile = {
+  id: string;
+  platform: ProfilePlatform;
+  username: string;
+  profileUrl: string;
+  verificationMethod: string;
+  verificationStatus: "PENDING" | "VERIFIED" | "EXPIRED" | "REJECTED";
+  verifiedAt: string | null;
+  lastFetchedAt: string | null;
+  latestSnapshot: {
+    id: string;
+    status: "SUCCESS" | "PARTIAL" | "FAILED";
+    metrics: Record<string, unknown> | null;
+    error: { code: string; message: string } | null;
+    fetchedAt: string;
+  } | null;
+};
+
+export type ProfileSyncResult = {
+  snapshotId: string;
+  fetchedAt: string;
+  status: "SUCCESS";
+  metrics: Record<string, unknown>;
+};
+
+export type StudentProject = {
+  id: string;
+  name: string;
+  description: string | null;
+  repositoryUrl: string;
+  liveDemoUrl: string | null;
+  isFork: boolean | null;
+  readmePresent: boolean | null;
+  hasTests: boolean | null;
+  hasDocker: boolean | null;
+  hasCi: boolean | null;
+  originalRepoOwner: string | null;
+  ownershipStatus: "PENDING" | "VERIFIED" | "NEEDS_REVIEW" | "REJECTED";
+  lastSyncedAt: string | null;
+  reviewStatus: "DRAFT" | "SUBMITTED" | "APPROVED";
+  vivaCompleted: boolean;
+  ownershipConfirmed: boolean;
+  score: {
+    automatic: number | null;
+    trainer: number | null;
+    final: number | null;
+    formulaVersion: string;
+    breakdown: Record<string, unknown>;
+    computedAt: string;
+  } | null;
+  scoreHistory: {
+    automatic: number | null;
+    trainer: number | null;
+    final: number | null;
+    formulaVersion: string;
+    computedAt: string;
+  }[];
+};
+
 const qs = (params: Record<string, string | number | boolean | undefined>) => {
   const sp = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -92,6 +159,48 @@ export const api = {
   studentAssessments: (id: string) => request<Paginated<StudentAssessment>>(`/students/${id}/assessments`),
   studentFeedback: (id: string) => request<TrainerFeedback[]>(`/students/${id}/feedback`),
   myStudent: () => request<Student>("/me/student"),
+  myCodingProfiles: async () => (await request<{ items: StudentCodingProfile[] }>("/me/profiles")).items,
+  addMyCodingProfile: (payload: { platform: ProfilePlatform; username: string }) =>
+    request<{ id: string; challenge: ProfileChallenge }>("/me/profiles", json("POST", payload)),
+  updateMyCodingProfile: (id: string, username: string) =>
+    request<{ id: string; username: string; challenge: ProfileChallenge }>(
+      `/me/profiles/${encodeURIComponent(id)}`,
+      json("PATCH", { username }),
+    ),
+  deleteMyCodingProfile: (id: string) =>
+    request<void>(`/me/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  verifyMyCodingProfile: (id: string) =>
+    request<{ id: string; verificationStatus: "VERIFIED" }>(
+      `/me/profiles/${encodeURIComponent(id)}/verify`,
+      json("POST"),
+    ),
+  syncMyCodingProfile: (id: string) =>
+    request<ProfileSyncResult>(`/me/profiles/${encodeURIComponent(id)}/sync`, json("POST")),
+  myProjects: async () => (await request<{ items: StudentProject[] }>("/me/projects")).items,
+  addMyProject: (payload: { repositoryUrl: string; name?: string; description?: string; liveDemoUrl?: string }) =>
+    request<{ id: string; ownershipStatus: StudentProject["ownershipStatus"]; automaticScore: number }>(
+      "/me/projects",
+      json("POST", payload),
+    ),
+  studentProjects: async (studentId: string) =>
+    (await request<{ items: StudentProject[] }>(`/students/${encodeURIComponent(studentId)}/projects`)).items,
+  reviewStudentProject: (
+    studentId: string,
+    projectId: string,
+    payload: { trainerScore: number; ownershipConfirmed: boolean; vivaCompleted: boolean; rubricScores?: Record<string, unknown> },
+  ) =>
+    request<{
+      projectId: string;
+      reviewId: string;
+      automaticScore: number;
+      trainerScore: number;
+      finalScore: number;
+      formulaVersion: string;
+      reviewedAt: string;
+    }>(
+      `/students/${encodeURIComponent(studentId)}/projects/${encodeURIComponent(projectId)}/reviews`,
+      json("POST", payload),
+    ),
   myAssessments: () => request<Paginated<StudentAssessment>>("/me/assessments"),
   myFeedback: () => request<TrainerFeedback[]>("/me/feedback"),
   assessments: async () => pageItems(await request<{ items: Assessment[] }>("/assessments?pageSize=100")),

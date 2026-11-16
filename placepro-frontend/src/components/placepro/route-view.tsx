@@ -15,6 +15,7 @@ import StudentDashboard from "@/components/placepro/student/student-dashboard";
 import MyPerformancePage from "@/components/placepro/student/my-performance-page";
 import InterviewFeedbackPage from "@/components/placepro/student/interview-feedback-page";
 import MyProfilePage from "@/components/placepro/student/my-profile-page";
+import ProfileIntelligencePage from "@/components/placepro/student/profile-intelligence-page";
 
 import AdminDashboard from "@/components/placepro/admin/admin-dashboard";
 import UserManagementPage from "@/components/placepro/admin/user-management-page";
@@ -56,6 +57,8 @@ export default function RouteView() {
       return <InterviewFeedbackPage />;
     case "my-profile":
       return <MyProfilePage />;
+    case "profile-intelligence":
+      return <ProfileIntelligencePage />;
 
     /* admin portal */
     case "users":

@@ -359,6 +359,8 @@ router.get("/audit-logs", requireAuth, requireRole(["admin"]), async (req, res, 
   }
 });
 
+
+//This endpoint doesn't required
 router.get("/import-student-reviews", requireAuth, requireRole(["admin"]), async (_req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -390,7 +392,6 @@ router.get("/import-student-reviews", requireAuth, requireRole(["admin"]), async
     next(err);
   }
 });
-
 router.post("/import-student-reviews/:reviewId/approve", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
     const { name, email, branch = "CSE", section = "A" } = req.body;
@@ -535,7 +536,6 @@ router.post("/import-student-reviews/:reviewId/approve", requireAuth, requireRol
     next(err);
   }
 });
-
 router.delete("/import-student-reviews/:reviewId", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
     const reason = String(req.body?.reason || "Rejected by administrator").trim();

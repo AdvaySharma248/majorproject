@@ -31,6 +31,12 @@ const PR_OPTIONS: FilterOption[] = [
   { label: "Placement ready (PR)", value: "PR" },
   { label: "Not ready (NPR)", value: "NPR" },
 ];
+const PROJECT_OPTIONS: FilterOption[] = [
+  { label: "Has approved projects", value: "has-project" },
+  { label: "No approved projects", value: "no-project" },
+  { label: "Project score below 60%", value: "score-below-60" },
+  { label: "Project score 60% or higher", value: "score-at-least-60" },
+];
 const SORT_OPTIONS: FilterOption[] = [
   { label: "Average · high to low", value: "avg-desc" },
   { label: "Average · low to high", value: "avg-asc" },
@@ -104,13 +110,19 @@ export default function StudentsPage() {
   const [section, setSection] = useState("all");
   const [pr, setPr] = useState("all");
   const [domain, setDomain] = useState("all");
+  const [projectFilter, setProjectFilter] = useState("all");
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [page, setPage] = useState(1);
 
   const loading = isRefreshing && students.length === 0;
 
   const filtersActive =
-    query.trim() !== "" || batch !== "all" || section !== "all" || pr !== "all" || domain !== "all";
+    query.trim() !== "" ||
+    batch !== "all" ||
+    section !== "all" ||
+    pr !== "all" ||
+    domain !== "all" ||
+    projectFilter !== "all";
 
   const resetFilters = () => {
     setQuery("");
@@ -118,6 +130,7 @@ export default function StudentsPage() {
     setSection("all");
     setPr("all");
     setDomain("all");
+    setProjectFilter("all");
     setSort(DEFAULT_SORT);
     setPage(1);
   };
@@ -144,6 +157,15 @@ export default function StudentsPage() {
     if (domain !== "all") {
       list = list.filter((s) => studentDomainScore(s, domain, skills) < 60);
     }
+    if (projectFilter === "has-project") {
+      list = list.filter((s) => (s.approvedProjectCount ?? (s.projectScore == null ? 0 : 1)) > 0);
+    } else if (projectFilter === "no-project") {
+      list = list.filter((s) => (s.approvedProjectCount ?? (s.projectScore == null ? 0 : 1)) === 0);
+    } else if (projectFilter === "score-below-60") {
+      list = list.filter((s) => s.projectScore != null && s.projectScore < 60);
+    } else if (projectFilter === "score-at-least-60") {
+      list = list.filter((s) => s.projectScore != null && s.projectScore >= 60);
+    }
     const mapped = list.map((s) => toRow(s, skills));
     switch (sort) {
       case "avg-asc":
@@ -155,7 +177,7 @@ export default function StudentsPage() {
       default:
         return mapped.sort((a, b) => b.average - a.average);
     }
-  }, [students, query, batch, section, pr, domain, sort, skills]);
+  }, [students, query, batch, section, pr, domain, projectFilter, sort, skills]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -219,6 +241,14 @@ export default function StudentsPage() {
               allLabel="All domains"
               ariaLabel="Filter by weak domain (score below 60%)"
               className="xl:w-[180px]"
+            />
+            <FilterSelect
+              value={projectFilter}
+              onChange={applyFilter(setProjectFilter)}
+              options={PROJECT_OPTIONS}
+              allLabel="All projects"
+              ariaLabel="Filter by approved projects and project score"
+              className="xl:w-[200px]"
             />
             <FilterSelect
               value={sort}

@@ -7,6 +7,7 @@ import {
   Check,
   ClipboardList,
   Download,
+  ExternalLink,
   Gauge,
   MessagesSquare,
   Target,
@@ -40,7 +41,7 @@ import {
   skillName,
   studentDomainScore,
 } from "@/lib/placepro/skill-taxonomy";
-import { api, type StudentAssessment } from "@/lib/placepro/api";
+import { api, type StudentAssessment, type StudentProject } from "@/lib/placepro/api";
 import type { Assessment, Student } from "@/types";
 import { SectionHeading } from "@/components/placepro/shared/page-header";
 import { MiniBar, PRBadge, ScorePill, StatusBadge, scoreTone } from "@/components/placepro/shared/badges";
@@ -48,7 +49,9 @@ import { ChartCard, EmptyState } from "@/components/placepro/shared/states";
 import { UserAvatar } from "@/components/placepro/shared/misc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
 
 /* ------------------------------------------------------------------ */
 /* Trainer — Student 360° profile                                      */
@@ -96,11 +99,19 @@ export default function StudentProfilePage() {
   const navigate = useAppStore((s) => s.navigate);
   const route = useAppStore((s) => s.route);
   const skills = useAppStore((s) => s.skills);
+  const { toast } = useToast();
 
   const studentId = route.params?.studentId;
   const [student, setStudent] = useState<Student>();
   const [historyResponse, setHistoryResponse] = useState<StudentAssessment[]>([]);
   const [feedback, setFeedback] = useState<import("@/types").TrainerFeedback[]>([]);
+  const [projects, setProjects] = useState<StudentProject[]>([]);
+  const [projectReviewDrafts, setProjectReviewDrafts] = useState<Record<string, {
+    trainerScore: string;
+    ownershipConfirmed: boolean;
+    vivaCompleted: boolean;
+  }>>({});
+  const [reviewingProjectId, setReviewingProjectId] = useState<string | null>(null);
   const [loadedForStudentId, setLoadedForStudentId] = useState<string>();
   const loading = Boolean(studentId && loadedForStudentId !== studentId);
 
@@ -109,12 +120,18 @@ export default function StudentProfilePage() {
       return;
     }
     let cancelled = false;
-    void Promise.all([api.student(studentId), api.studentAssessments(studentId), api.studentFeedback(studentId)])
-      .then(([profile, assessments, studentFeedback]) => {
+    void Promise.all([
+      api.student(studentId),
+      api.studentAssessments(studentId),
+      api.studentFeedback(studentId),
+      api.studentProjects(studentId),
+    ])
+      .then(([profile, assessments, studentFeedback, studentProjects]) => {
         if (cancelled) return;
         setStudent(profile);
         setHistoryResponse(assessments.items);
         setFeedback(studentFeedback);
+        setProjects(studentProjects);
         setLoadedForStudentId(studentId);
       })
       .catch(() => {
@@ -122,11 +139,102 @@ export default function StudentProfilePage() {
           setStudent(undefined);
           setHistoryResponse([]);
           setFeedback([]);
+          setProjects([]);
           setLoadedForStudentId(studentId);
         }
       });
     return () => { cancelled = true; };
   }, [studentId]);
+
+  async function reviewProject(project: StudentProject) {
+    if (!studentId) return;
+    const draft = projectReviewDrafts[project.id] ?? {
+      trainerScore: "60",
+      ownershipConfirmed: project.ownershipConfirmed,
+      vivaCompleted: project.vivaCompleted,
+    };
+    const trainerScore = Number(draft.trainerScore);
+    if (!Number.isFinite(trainerScore) || trainerScore < 0 || trainerScore > 100) {
+      toast({ title: "Invalid trainer score", description: "Enter a score from 0 to 100.", variant: "destructive" });
+      return;
+    }
+    setReviewingProjectId(project.id);
+    try {
+      const result = await api.reviewStudentProject(studentId, project.id, {
+        trainerScore,
+        ownershipConfirmed: draft.ownershipConfirmed,
+        vivaCompleted: draft.vivaCompleted,
+      });
+      setProjects((current) => current.map((item) => item.id === project.id
+        ? {
+            ...item,
+            ownershipStatus: "VERIFIED",
+            reviewStatus: "APPROVED",
+            ownershipConfirmed: true,
+            vivaCompleted: true,
+            score: {
+              automatic: result.automaticScore,
+              trainer: result.trainerScore,
+              final: result.finalScore,
+              formulaVersion: result.formulaVersion,
+              breakdown: item.score?.breakdown ?? {},
+              computedAt: result.reviewedAt,
+            },
+            scoreHistory: [
+              {
+                automatic: result.automaticScore,
+                trainer: result.trainerScore,
+                final: result.finalScore,
+                formulaVersion: result.formulaVersion,
+                computedAt: result.reviewedAt,
+              },
+              ...item.scoreHistory,
+            ],
+          }
+        : item));
+      toast({
+        title: "Project score approved",
+        description: `Final score ${result.finalScore.toFixed(1)}% saved as ${result.formulaVersion}.`,
+      });
+      try {
+        const [updatedStudent, updatedProjects] = await Promise.all([
+          api.student(studentId),
+          api.studentProjects(studentId),
+        ]);
+        setStudent(updatedStudent);
+        setProjects(updatedProjects);
+      } catch (error) {
+        toast({
+          title: "Review saved, profile not refreshed",
+          description: error instanceof Error ? error.message : "Refresh the student profile to see the updated readiness.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Project review failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setReviewingProjectId(null);
+    }
+  }
+
+  function updateProjectReviewDraft(
+    project: StudentProject,
+    patch: Partial<{ trainerScore: string; ownershipConfirmed: boolean; vivaCompleted: boolean }>,
+  ) {
+    setProjectReviewDrafts((current) => ({
+      ...current,
+      [project.id]: {
+        trainerScore: current[project.id]?.trainerScore ?? "60",
+        ownershipConfirmed: current[project.id]?.ownershipConfirmed ?? project.ownershipConfirmed,
+        vivaCompleted: current[project.id]?.vivaCompleted ?? project.vivaCompleted,
+        ...patch,
+      },
+    }));
+  }
 
   const model = useMemo(() => {
     if (!student || !studentId) return null;
@@ -297,6 +405,7 @@ export default function StudentProfilePage() {
     { label: "Total assessments", icon: ClipboardList, value: model.history.length },
     { label: "Technical score", icon: Target, value: `${model.technical}%` },
     { label: "Communication score", icon: MessagesSquare, value: `${student.scores.comm}%` },
+    { label: "Project score", icon: Target, value: student.projectScore === null || student.projectScore === undefined ? "—" : `${student.projectScore}%` },
   ];
 
   /* ------------------------------ render ------------------------------ */
@@ -345,7 +454,7 @@ export default function StudentProfilePage() {
             </Button>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-px border-t border-border/70 bg-border/70 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-px border-t border-border/70 bg-border/70 lg:grid-cols-5">
           {summaryTiles.map((t) => (
             <div key={t.label} className="flex items-center justify-between gap-3 bg-card px-5 py-4">
               <div className="min-w-0">
@@ -370,6 +479,7 @@ export default function StudentProfilePage() {
             <TabsTrigger value="assessments">Assessments</TabsTrigger>
             <TabsTrigger value="skills">Skill Analysis</TabsTrigger>
             <TabsTrigger value="feedback">Interview Feedback</TabsTrigger>
+            <TabsTrigger value="projects">Projects</TabsTrigger>
           </TabsList>
         </div>
 
@@ -819,6 +929,120 @@ export default function StudentProfilePage() {
               </Card>
             ))
           )}
+        </TabsContent>
+
+        <TabsContent value="projects" className="mt-4 space-y-4">
+          <Card className="gap-1 border-border bg-card p-5 shadow-none">
+            <h2 className="text-base font-semibold text-foreground">Project scoring</h2>
+            <p className="text-sm text-muted-foreground">
+              Final score = 40% automated repository score + 60% trainer score. Approved project scores are averaged for readiness; a score of at least 60% is required for PR.
+            </p>
+          </Card>
+          {projects.length === 0 ? (
+            <Card className="border-dashed border-border bg-card p-8 text-center shadow-none">
+              <p className="text-sm font-medium text-foreground">No projects submitted</p>
+              <p className="mt-1 text-sm text-muted-foreground">Student projects appear here after submission from Profile Intelligence.</p>
+            </Card>
+          ) : projects.map((project) => {
+            const draft = projectReviewDrafts[project.id] ?? {
+              trainerScore: "60",
+              ownershipConfirmed: project.ownershipConfirmed,
+              vivaCompleted: project.vivaCompleted,
+            };
+            const isReviewing = reviewingProjectId === project.id;
+            return (
+              <Card key={project.id} className="gap-0 border-border bg-card p-0 shadow-none">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-5 py-4">
+                  <div className="min-w-0">
+                    <a
+                      className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline"
+                      href={project.repositoryUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {project.name} <ExternalLink className="size-3.5" aria-hidden />
+                    </a>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Ownership: {project.ownershipStatus.replaceAll("_", " ")} · Review: {project.reviewStatus.toLowerCase()}
+                    </p>
+                    {project.description ? <p className="mt-2 max-w-3xl text-sm text-muted-foreground">{project.description}</p> : null}
+                  </div>
+                  <div className="text-right text-sm">
+                    <p className="text-muted-foreground">Automated score</p>
+                    <p className="font-semibold text-foreground">{project.score?.automatic ?? "—"}%</p>
+                    {project.score?.final !== null && project.score?.final !== undefined ? (
+                      <p className="mt-1 text-muted-foreground">Latest final: {project.score.final}%</p>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="grid gap-3 px-5 py-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {[
+                    ["README", project.readmePresent],
+                    ["Tests", project.hasTests],
+                    ["Docker", project.hasDocker],
+                    ["CI workflow", project.hasCi],
+                    ["Original repository", project.isFork === null ? null : !project.isFork],
+                    ["Live demo", Boolean(project.liveDemoUrl)],
+                  ].map(([label, present]) => (
+                    <p key={String(label)} className="text-xs text-muted-foreground">
+                      {label}: <span className="font-medium text-foreground">{present === null ? "Unknown" : present ? "Yes" : "No"}</span>
+                    </p>
+                  ))}
+                </div>
+                {project.scoreHistory.length > 1 ? (
+                  <details className="border-t border-border/70 px-5 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Score history</summary>
+                    <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      {project.scoreHistory.map((entry, index) => (
+                        <li key={`${entry.computedAt}-${index}`}>
+                          {fmtDate(entry.computedAt)} · {entry.formulaVersion} · Auto {entry.automatic ?? "—"} · Trainer {entry.trainer ?? "—"} · Final {entry.final ?? "pending"}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+                <div className="grid gap-4 border-t border-border/70 px-5 py-4 md:grid-cols-[12rem_1fr_auto] md:items-end">
+                  <label className="grid gap-1.5 text-xs font-medium text-foreground">
+                    Trainer score (0–100)
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      value={draft.trainerScore}
+                      onChange={(event) => updateProjectReviewDraft(project, { trainerScore: event.target.value })}
+                      aria-label={`Trainer score for ${project.name}`}
+                    />
+                  </label>
+                  <div className="grid gap-2 text-sm text-foreground">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.ownershipConfirmed}
+                        onChange={(event) => updateProjectReviewDraft(project, { ownershipConfirmed: event.target.checked })}
+                      />
+                      Confirm project ownership
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={draft.vivaCompleted}
+                        onChange={(event) => updateProjectReviewDraft(project, { vivaCompleted: event.target.checked })}
+                      />
+                      Project viva completed
+                    </label>
+                    <p className="text-xs text-muted-foreground">Viva status is recorded but isn’t required for score approval.</p>
+                  </div>
+                  <Button
+                    onClick={() => void reviewProject(project)}
+                    disabled={isReviewing || !draft.ownershipConfirmed}
+                  >
+                    {isReviewing ? "Saving…" : project.reviewStatus === "APPROVED" ? "Recalculate score" : "Approve project"}
+                  </Button>
+                </div>
+              </Card>
+            );
+          })}
         </TabsContent>
       </Tabs>
     </div>

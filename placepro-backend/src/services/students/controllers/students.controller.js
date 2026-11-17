@@ -8,7 +8,38 @@ const projectsRouter = require("./projects.controller");
 const router = Router();
 
 router.use(profileIntelligenceRouter);
+router.use(require("./github-preview.controller"));
 router.use(projectsRouter);
+
+// Preferences are owned by the authenticated user, never a request-supplied user id.
+router.get("/me/subject-columns", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(`UPDATE users SET subject_column_preferences =
+      CASE WHEN subject_column_preferences IS NULL THEN NULL ELSE
+        COALESCE((SELECT jsonb_object_agg(skill_code, default_visible) FROM skill_taxonomy WHERE deleted_at IS NULL), '{}'::jsonb)
+        || subject_column_preferences END
+      WHERE user_id = $1 RETURNING subject_column_preferences`, [req.user.id]);
+    res.json({ columns: rows[0].subject_column_preferences });
+  } catch (err) { next(err); }
+});
+router.patch("/me/subject-columns", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
+  try {
+    const { columns, reset } = req.body;
+    if (reset !== true && (!columns || typeof columns !== "object" || Array.isArray(columns) || Object.values(columns).some(v => typeof v !== "boolean"))) {
+      return res.status(400).json({ error: { code: "VALIDATION", message: "Columns must map subject identifiers to booleans." } });
+    }
+    if (reset !== true) {
+      const known = await pool.query("SELECT skill_code FROM skill_taxonomy WHERE deleted_at IS NULL");
+      const codes = new Set(known.rows.map(r => r.skill_code));
+      if (Object.keys(columns).some(k => !codes.has(k))) return res.status(400).json({ error: { code: "VALIDATION", message: "Unknown subject identifier." } });
+    }
+    const { rows } = await pool.query(`UPDATE users SET subject_column_preferences = CASE WHEN $2 THEN NULL ELSE
+      COALESCE((SELECT jsonb_object_agg(skill_code, default_visible) FROM skill_taxonomy WHERE deleted_at IS NULL), '{}'::jsonb)
+      || COALESCE(subject_column_preferences, '{}'::jsonb) || $3::jsonb END
+      WHERE user_id = $1 RETURNING subject_column_preferences`, [req.user.id, reset === true, JSON.stringify(columns || {})]);
+    res.json({ columns: rows[0].subject_column_preferences });
+  } catch (err) { next(err); }
+});
 
 router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
@@ -18,9 +49,10 @@ router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (r
       section,
       prStatus,
       domain,
+      domainId,
       page = "1",
       pageSize = "10",
-      sort = "average_desc",
+      sort = "name_asc",
     } = req.query;
 
     const conditions = ["1=1"];
@@ -53,32 +85,45 @@ router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (r
       conditions.push(`s.readiness_status = $${params.length}::readiness_status`);
     }
 
-    if (domain) {
-      params.push(domain);
+    if (domainId || domain) {
+      params.push(domainId || domain);
       conditions.push(`
         EXISTS (
           SELECT 1 
           FROM skill_ratings sr
           JOIN skill_taxonomy st 
             ON st.skill_id = sr.skill_id
+          JOIN evaluation_domains d ON d.domain_id = st.domain_id
           WHERE sr.student_id = s.student_id 
-            AND CAST(st.domain_category AS TEXT) = $${params.length}
+            AND (CAST(d.domain_id AS TEXT) = $${params.length} OR lower(d.name) = lower($${params.length}))
           GROUP BY sr.student_id
           HAVING AVG(sr.score_percentage) < 60
         )
       `);
     }
 
-    const orderMap = {
-      average_desc: "s.average_score DESC",
-      average_asc: "s.average_score ASC",
-      cgpa_desc: "s.cgpa DESC",
-      name_asc: "s.full_name ASC",
+    const projectFilters = {
+      "has-project": "project_count > 0", "no-project": "project_count = 0",
+      "score-below-60": "project_score < 60", "score-at-least-60": "project_score >= 60",
     };
-    const orderBy = orderMap[sort] || "s.average_score DESC";
-    const p = Math.max(1, parseInt(page, 10));
-    const ps = Math.max(1, parseInt(pageSize, 10));
-    const offset = (p - 1) * ps;
+    const projectCondition = Object.hasOwn(projectFilters, req.query.projectFilter) ? projectFilters[req.query.projectFilter] : null;
+    if (projectCondition) conditions.push(`(SELECT ${projectCondition} FROM (
+      SELECT COUNT(*) AS project_count, ROUND(AVG(score.final_score), 2) AS project_score
+      FROM projects p
+      JOIN LATERAL (SELECT final_score FROM project_score_snapshots WHERE project_id = p.project_id AND final_score IS NOT NULL ORDER BY computed_at DESC, project_score_snapshot_id DESC LIMIT 1) score ON TRUE
+      JOIN LATERAL (SELECT review_status FROM project_reviews WHERE project_id = p.project_id ORDER BY created_at DESC, project_review_id DESC LIMIT 1) review ON TRUE
+      WHERE p.student_id = s.student_id AND p.ownership_status = 'VERIFIED' AND review.review_status = 'APPROVED'
+    ) project_metrics)`);
+
+    const orderMap = {
+      cgpa_desc: "s.cgpa DESC NULLS LAST",
+      cgpa_asc: "s.cgpa ASC NULLS LAST",
+      name_asc: "LOWER(s.full_name) ASC",
+      name_desc: "LOWER(s.full_name) DESC",
+    };
+    const orderBy = Object.hasOwn(orderMap, sort) ? orderMap[sort] : orderMap.name_asc;
+    let p = /^\d+$/.test(page) && Number.isSafeInteger(Number(page)) ? Math.max(1, Number(page)) : 1;
+    const ps = /^\d+$/.test(pageSize) ? Math.min(1000, Math.max(1, Number(pageSize))) : 10;
 
     const countRes = await pool.query(
       `SELECT COUNT(*) 
@@ -88,10 +133,12 @@ router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (r
     );
 
     const total = parseInt(countRes.rows[0].count, 10);
+    p = Math.min(p, Math.max(1, Math.ceil(total / ps)));
+    const offset = (p - 1) * ps;
     const rowsRes = await pool.query(
       `SELECT s.* FROM students s
        WHERE ${conditions.join(" AND ")}
-       ORDER BY ${orderBy}
+       ORDER BY ${orderBy}, s.student_id ASC
        LIMIT $${params.length + 1} 
        OFFSET $${params.length + 2}`,
       [...params, ps, offset]

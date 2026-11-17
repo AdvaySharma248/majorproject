@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { routeHref } from "@/lib/placepro/routing";
 import { useAppStore } from "@/lib/placepro/store";
 import { FOOTER_NAV, ROLE_NAV } from "@/lib/placepro/nav";
 import { cn } from "@/lib/utils";
@@ -39,7 +41,6 @@ export function NavList({
   const user = useAppStore((s) => s.user);
   const route = useAppStore((s) => s.route);
   const pinned = useAppStore((s) => s.sidebarPinned);
-  const navigate = useAppStore((s) => s.navigate);
   const setPinned = useAppStore((s) => s.setSidebarPinned);
   if (!user) return null;
 
@@ -65,10 +66,9 @@ export function NavList({
             {items.map((item) => {
               const active = route.page === item.page;
               const link = (
-                <button
-                  type="button"
+                <Link
+                  href={routeHref(user.role, item.page)}
                   onClick={() => {
-                    navigate(item.page);
                     onNavigate?.();
                   }}
                   aria-current={active ? "page" : undefined}
@@ -82,7 +82,7 @@ export function NavList({
                 >
                   <item.icon className={cn("size-[17px] shrink-0", active ? "text-primary" : "text-muted-foreground/80 group-hover:text-foreground")} />
                   {expanded ? <span className="truncate">{item.label}</span> : <span className="sr-only">{item.label}</span>}
-                </button>
+                </Link>
               );
               return (
                 <li key={item.page}>

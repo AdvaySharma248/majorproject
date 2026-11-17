@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Building2,
   GraduationCap,
   Layers,
   SlidersHorizontal,
-  UserCheck,
+  UserRound,
   UsersRound,
 } from "lucide-react";
 import {
@@ -23,6 +23,8 @@ import {
   YAxis,
 } from "recharts";
 import { useAppStore } from "@/lib/placepro/store";
+import { api } from "@/lib/placepro/api";
+import type { AppUser } from "@/types";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { StatCard } from "@/components/placepro/shared/stat-card";
 import { ChartCard, EmptyState } from "@/components/placepro/shared/states";
@@ -31,6 +33,7 @@ import { UserAvatar } from "@/components/placepro/shared/misc";
 import { Card } from "@/components/ui/card";
 import { SectionHeading } from "@/components/placepro/shared/page-header";
 import { StudentVerificationRequests } from "./student-verification-requests";
+import { Skeleton } from "@/components/ui/skeleton";
 
 /* ------------------------------------------------------------------ */
 /* Admin Dashboard                                                     */
@@ -53,22 +56,15 @@ export default function AdminDashboard() {
     const trainers = users.filter((u) => u.role === "trainer").length;
     const admins = users.filter((u) => u.role === "admin").length;
     const studentUsers = users.filter((u) => u.role === "student").length;
-    const active = users.filter((u) => u.status === "active").length;
-    const inactive = users.length - active;
     const activeSkills = skills.filter((s) => s.active).length;
     const totalStudents = dashboard?.totalStudents ?? students.length;
-    return { trainers, admins, studentUsers, active, inactive, activeSkills, totalStudents };
+    return { trainers, admins, studentUsers, activeSkills, totalStudents };
   }, [users, skills, students, dashboard]);
 
   const roleBars = [
     { role: "Administrator", count: stats.admins },
     { role: "Trainer", count: stats.trainers },
     { role: "Student", count: stats.studentUsers },
-  ];
-
-  const statusDonut = [
-    { name: "Active", value: stats.active, color: GREEN },
-    { name: "Inactive", value: stats.inactive, color: AMBER },
   ];
 
   const readiness = useMemo(() => {
@@ -127,17 +123,16 @@ export default function AdminDashboard() {
         />
         <StatCard label="Total trainers" value={stats.trainers} icon={UsersRound} hint="Technical staff accounts" />
         <StatCard label="Total batches" value={batches.length} icon={Layers} hint="Active cohorts" />
-        <StatCard label="Active users" value={stats.active} icon={UserCheck} hint="Signed in recently" />
         <StatCard label="Configured skills" value={stats.activeSkills} icon={SlidersHorizontal} hint="Active evaluation parameters" />
         <StatCard label="Registered companies" value={companies.length} icon={Building2} hint="Eligibility profiles" />
       </section>
 
       {/* ------------------------------ charts ------------------------------ */}
-      <section className="grid gap-4 lg:grid-cols-12">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <ChartCard
           title="Users by role"
           description="Distribution of accounts across the platform"
-          className="lg:col-span-4 pp-rise"
+          className="pp-rise"
           bodyClassName="h-[240px] px-2 pb-2 pt-4"
         >
           <ResponsiveContainer width="100%" height="100%">
@@ -152,49 +147,9 @@ export default function AdminDashboard() {
         </ChartCard>
 
         <ChartCard
-          title="Active vs inactive users"
-          description="Account status across all roles"
-          className="lg:col-span-4 pp-rise"
-          bodyClassName="px-2 pb-2 pt-4"
-        >
-          <div className="relative h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={statusDonut}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={56}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  strokeWidth={0}
-                >
-                  {statusDonut.map((d) => (
-                    <Cell key={d.name} fill={d.color} />
-                  ))}
-                </Pie>
-                <ReTooltip formatter={(v: number, n: string) => [`${v} users`, n]} contentStyle={tooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="tabular text-[28px] font-semibold leading-none text-foreground">{users.length}</span>
-              <span className="mt-1 text-[11px] text-muted-foreground">total users</span>
-            </div>
-          </div>
-          <div className="mt-2 flex items-center justify-center gap-5 border-t border-border/70 pt-3">
-            {statusDonut.map((d) => (
-              <span key={d.name} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="size-2 rounded-full" style={{ background: d.color }} />
-                {d.name} · <span className="tabular font-semibold text-foreground">{d.value}</span>
-              </span>
-            ))}
-          </div>
-        </ChartCard>
-
-        <ChartCard
           title="Batch readiness"
           description="Placement-ready vs not-ready students per batch"
-          className="lg:col-span-4 pp-rise"
+          className="pp-rise"
           bodyClassName="px-2 pb-2 pt-4"
         >
           <div className="h-[188px]">
@@ -226,6 +181,8 @@ export default function AdminDashboard() {
             </span>
           </div>
         </ChartCard>
+
+        <FacultyDirectory />
       </section>
 
       {/* ---------------------- recent system activity ---------------------- */}
@@ -273,6 +230,78 @@ export default function AdminDashboard() {
         )}
       </Card>
     </div>
+  );
+}
+
+function FacultyDirectory() {
+  const [faculty, setFaculty] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const loadFaculty = async () => {
+      const allFaculty: AppUser[] = [];
+      for (let page = 1; ; page += 1) {
+        const users = await api.users({ role: "trainer", page, pageSize: 100 });
+        allFaculty.push(...users);
+        if (users.length < 100) break;
+      }
+      if (active) setFaculty(allFaculty);
+    };
+    void loadFaculty()
+      .catch(() => { if (active) setFailed(true); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  return (
+    <ChartCard
+      title="Faculty directory"
+      description="Registered faculty and trainers"
+      className="pp-rise"
+      bodyClassName="h-[240px] overflow-hidden p-0"
+    >
+      {loading ? (
+        <div className="space-y-3 p-4" role="status" aria-label="Loading faculty directory">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div key={index} className="flex items-center gap-3">
+              <Skeleton className="size-8 shrink-0 rounded-full" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <Skeleton className="h-3 w-2/5" />
+                <Skeleton className="h-3 w-3/5" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : failed ? (
+        <div role="status" className="flex h-full flex-col items-center justify-center px-5 text-center">
+          <p className="text-sm font-medium text-foreground">Faculty directory unavailable</p>
+          <p className="mt-1 text-xs text-muted-foreground">Please refresh the dashboard to try again.</p>
+        </div>
+      ) : faculty.length ? (
+        <ul className="h-full divide-y divide-border/60 overflow-y-auto px-4">
+          {faculty.map((member) => (
+            <li key={member.id} className="flex min-w-0 items-center gap-3 py-3">
+              <UserAvatar name={member.name} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-medium text-foreground">{member.name}</p>
+                <p className="text-[11px] text-muted-foreground">Technical Trainer</p>
+                <a href={"mailto:" + member.email} className="block truncate text-[11px] text-primary hover:underline">
+                  {member.email}
+                </a>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center px-5 text-center">
+          <UserRound className="size-7 text-muted-foreground/70" aria-hidden="true" />
+          <p className="mt-2 text-sm font-medium text-foreground">No faculty registered</p>
+          <p className="mt-1 text-xs text-muted-foreground">Trainer accounts will appear here.</p>
+        </div>
+      )}
+    </ChartCard>
   );
 }
 

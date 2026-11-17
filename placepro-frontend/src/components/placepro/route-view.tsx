@@ -1,5 +1,7 @@
 "use client";
 
+import type { Route } from "@/types";
+import { canVisit } from "@/lib/placepro/routing";
 import { useAppStore } from "@/lib/placepro/store";
 import { EmptyState } from "@/components/placepro/shared/states";
 import { FileQuestion } from "lucide-react";
@@ -21,6 +23,7 @@ import AdminDashboard from "@/components/placepro/admin/admin-dashboard";
 import UserManagementPage from "@/components/placepro/admin/user-management-page";
 import BatchManagementPage from "@/components/placepro/admin/batch-management-page";
 import SkillConfigPage from "@/components/placepro/admin/skill-config-page";
+import ManageDomainsPage from "@/components/placepro/admin/manage-domains-page";
 import CompanyRequirementsPage from "@/components/placepro/admin/company-requirements-page";
 import AuditLogsPage from "@/components/placepro/admin/audit-logs-page";
 
@@ -28,10 +31,9 @@ import AuditLogsPage from "@/components/placepro/admin/audit-logs-page";
 /* RouteView — resolves the in-app route to a portal screen            */
 /* ------------------------------------------------------------------ */
 
-export default function RouteView() {
+export default function RouteView({ route }: { route: Route }) {
   const user = useAppStore((s) => s.user);
-  const route = useAppStore((s) => s.route);
-  if (!user) return null;
+  if (!user || !canVisit(user.role, route.page)) return null;
 
   switch (route.page) {
     /* shared */
@@ -67,6 +69,8 @@ export default function RouteView() {
       return <BatchManagementPage />;
     case "skills":
       return <SkillConfigPage />;
+    case "domains":
+      return <ManageDomainsPage />;
     case "companies":
       return <CompanyRequirementsPage />;
     case "audit":

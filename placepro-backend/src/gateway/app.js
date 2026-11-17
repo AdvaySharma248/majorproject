@@ -24,7 +24,7 @@ app.use("/api/v1/dashboard", createProxy(serviceUrl("DASHBOARD", 4002)));
 app.use(["/api/v1/students", "/api/v1/me"], createProxy(serviceUrl("STUDENTS", 4003)));
 app.use(["/api/v1/assessments", "/api/v1/assessment-imports"], createProxy(serviceUrl("ASSESSMENTS", 4004)));
 app.use("/api/v1/companies", createProxy(serviceUrl("COMPANIES", 4005)));
-app.use(["/api/v1/users", "/api/v1/batches", "/api/v1/skills", "/api/v1/audit-logs", "/api/v1/import-student-reviews"], createProxy(serviceUrl("ADMIN", 4006)));
+app.use(["/api/v1/users", "/api/v1/batches", "/api/v1/skills", "/api/v1/domains", "/api/v1/audit-logs", "/api/v1/import-student-reviews"], createProxy(serviceUrl("ADMIN", 4006)));
 
 app.use(errorHandler);
 

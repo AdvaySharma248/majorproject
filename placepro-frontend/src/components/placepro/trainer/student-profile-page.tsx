@@ -52,6 +52,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import GithubPreview from "./github-preview";
 
 /* ------------------------------------------------------------------ */
 /* Trainer — Student 360° profile                                      */
@@ -67,21 +68,14 @@ const tooltipStyle = {
   padding: "8px 12px",
 };
 
-const RADAR_LABEL: Record<string, string> = {
-  "Programming / DSA": "DSA",
-  "Core CS": "Core CS",
-  Development: "Development",
-  Communication: "Communication",
-};
-
 const DOMAIN_GUIDANCE: Record<string, string> = {
-  "Programming / DSA":
+  "Programming/DSA":
     "Practice 3–4 timed problems daily from the contest set and review the pattern write-ups weekly.",
   "Core Computer Science":
     "Revise the module recordings, complete the worksheet series and attempt the section quizzes.",
   "Software Development":
     "Build one small CRUD project end-to-end and add unit tests for the service layer.",
-  "Communication / Soft Skills":
+  "Employability & Soft Skills":
     "Rehearse a 90-second introduction and structure scenario answers with the STAR format.",
 };
 
@@ -329,9 +323,10 @@ export default function StudentProfilePage() {
   }
 
   const radarData = groups.map((g) => ({
-    domain: RADAR_LABEL[g.label] ?? g.label,
+    domain: g.label,
     score: studentDomainScore(student, g.label, skills),
   }));
+  const useDomainRadar = radarData.length >= 3 && radarData.length <= 6 && radarData.every((item) => item.domain.length <= 18);
   const trendData = student.trend.map((v, i) => ({ assessment: i + 1, score: v }));
   const barData = model.skillEntries.map((s) => ({ name: s.name, score: s.score }));
 
@@ -438,6 +433,7 @@ export default function StudentProfilePage() {
                   CGPA {student.cgpa.toFixed(1)}
                 </span>
                 <PRBadge status={student.prStatus} />
+                <GithubPreview key={student.id} studentId={student.id} />
               </div>
             </div>
           </div>
@@ -487,26 +483,33 @@ export default function StudentProfilePage() {
         <TabsContent value="overview" className="mt-4 space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <ChartCard
-              title="Domain radar"
-              description="Average score across the four evaluation domains"
+              title="Domain performance"
+              description="Scores grouped by evaluation domain"
               bodyClassName="h-[260px] px-2 pb-0 pt-4"
             >
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={radarData} outerRadius="72%">
-                  <PolarGrid stroke="#E4E9E4" />
-                  <PolarAngleAxis dataKey="domain" tick={axisTick} />
-                  <PolarRadiusAxis domain={[0, 100]} tick={axisTick} axisLine={false} tickLine={false} />
-                  <ReTooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={tooltipStyle} />
-                  <Radar
-                    dataKey="score"
-                    stroke="#245C45"
-                    strokeWidth={2}
-                    fill="#245C45"
-                    fillOpacity={0.15}
-                    animationDuration={700}
-                  />
-                </RadarChart>
-              </ResponsiveContainer>
+              {!radarData.length ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">No domain scores recorded yet.</div>
+              ) : useDomainRadar ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={radarData} outerRadius="72%">
+                    <PolarGrid stroke="#E4E9E4" />
+                    <PolarAngleAxis dataKey="domain" tick={axisTick} />
+                    <PolarRadiusAxis domain={[0, 100]} tick={axisTick} axisLine={false} tickLine={false} />
+                    <ReTooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={tooltipStyle} />
+                    <Radar dataKey="score" stroke="#245C45" strokeWidth={2} fill="#245C45" fillOpacity={0.15} animationDuration={700} />
+                  </RadarChart>
+                </ResponsiveContainer>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={radarData} layout="vertical" margin={{ top: 0, right: 18, bottom: 0, left: 6 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E4E9E4" horizontal={false} />
+                    <XAxis type="number" domain={[0, 100]} tick={axisTick} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="domain" width={136} tick={axisTick} axisLine={false} tickLine={false} interval={0} tickFormatter={(value: string) => value.length > 20 ? `${value.slice(0, 18)}…` : value} />
+                    <ReTooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={tooltipStyle} />
+                    <Bar dataKey="score" fill="#245C45" radius={[0, 4, 4, 0]} barSize={18} animationDuration={700} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </ChartCard>
 
             <ChartCard
@@ -642,7 +645,7 @@ export default function StudentProfilePage() {
                           {s.name}
                         </p>
                         <p className="mt-0.5 pl-6 text-xs leading-relaxed text-muted-foreground">
-                          {DOMAIN_GUIDANCE[s.domain] ?? DOMAIN_GUIDANCE["Core Computer Science"]}
+                          {DOMAIN_GUIDANCE[s.domain] ?? "Review recent assessment feedback and focus practice on the skills in this domain that need improvement."}
                         </p>
                       </div>
                       <span

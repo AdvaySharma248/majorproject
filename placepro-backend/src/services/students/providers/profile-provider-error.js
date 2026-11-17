@@ -7,10 +7,11 @@ class ProfileProviderError extends Error {
   }
 }
 
-async function requestJson(url, { headers = {} } = {}) {
+async function requestJson(url, { headers = {}, method = "GET", body, responseType = "json" } = {}) {
   let response;
   try {
     response = await fetch(url, {
+      method, body,
       headers: {
         Accept: "application/json",
         "User-Agent": "PlacePro-Profile-Intelligence",
@@ -25,6 +26,18 @@ async function requestJson(url, { headers = {} } = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new ProfileProviderError("The profile provider rejected the request", {
+        code: "PROFILE_PROVIDER_UNAUTHORIZED",
+        statusCode: 503,
+      });
+    }
+    if (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0") {
+      throw new ProfileProviderError("GitHub's API rate limit was reached", {
+        code: "PROFILE_PROVIDER_RATE_LIMITED",
+        statusCode: 503,
+      });
+    }
     if (response.status === 404) {
       throw new ProfileProviderError("The provider profile was not found", {
         code: "PROFILE_NOT_FOUND",
@@ -33,12 +46,13 @@ async function requestJson(url, { headers = {} } = {}) {
     }
 
     throw new ProfileProviderError("The profile provider rejected the request", {
-      code: response.status === 403 ? "PROFILE_PROVIDER_RATE_LIMITED" : "PROFILE_PROVIDER_ERROR",
+      code: [403, 429].includes(response.status) ? "PROFILE_PROVIDER_RATE_LIMITED" : "PROFILE_PROVIDER_ERROR",
+      statusCode: [403, 429].includes(response.status) ? 503 : 502,
     });
   }
 
   try {
-    return await response.json();
+    return responseType === "text" ? await response.text() : await response.json();
   } catch {
     throw new ProfileProviderError("The profile provider returned an invalid response", {
       code: "PROFILE_PROVIDER_BAD_RESPONSE",

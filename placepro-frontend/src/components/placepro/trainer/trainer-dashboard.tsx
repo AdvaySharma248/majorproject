@@ -106,7 +106,7 @@ export default function TrainerDashboard() {
 
     const attention = rawAttention.map((s) => ({
       student: s,
-      weak: weakestDomain(s, skills) ?? { domain: "Core CS", score: s.average },
+      weak: weakestDomain(s, skills) ?? { domain: "Unavailable", score: s.average },
     }));
 
     // Historical monthly trend computed from live assessments

@@ -37,11 +37,19 @@ erDiagram
         readiness_status readiness_status
     }
 
+    EVALUATION_DOMAINS {
+        BIGINT domain_id PK
+        VARCHAR domain_code UK
+        VARCHAR name UK
+        TEXT description
+        BOOLEAN is_active
+    }
+
     SKILL_TAXONOMY {
         BIGINT skill_id PK
         VARCHAR skill_code UK
         VARCHAR skill_name UK
-        skill_domain domain_category
+        BIGINT domain_id FK
         param_type parameter_type
         BOOLEAN is_active
     }

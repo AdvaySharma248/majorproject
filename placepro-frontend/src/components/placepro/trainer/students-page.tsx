@@ -1,21 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileSpreadsheet, UsersRound } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
-import {
-  domainGroups,
-  domainScores,
-  studentDomainScore,
-} from "@/lib/placepro/skill-taxonomy";
-import type { Skill, Student } from "@/types";
-import { PageHeader, SectionHeading } from "@/components/placepro/shared/page-header";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { api } from "@/lib/placepro/api";
+import { useSubjectColumns } from "./use-subject-columns";
+import StudentFilterPanel from "./student-filter-panel";
+import { applyStudentFilters, readStudentFilters, studentFilterKeys, type StudentFilters } from "@/lib/placepro/student-filters";
+import type { Student } from "@/types";
+import { PageHeader } from "@/components/placepro/shared/page-header";
 import { MiniBar, PRBadge } from "@/components/placepro/shared/badges";
-import { FilterSelect, SearchInput, type FilterOption } from "@/components/placepro/shared/controls";
+import { SearchInput, type FilterOption } from "@/components/placepro/shared/controls";
 import { EmptyState, TableSkeleton } from "@/components/placepro/shared/states";
 import { TablePagination, UserAvatar } from "@/components/placepro/shared/misc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /* ------------------------------------------------------------------ */
 /* Trainer — Student Management listing                                */
@@ -23,171 +24,87 @@ import { Card } from "@/components/ui/card";
 
 const PAGE_SIZE = 10;
 
-const SECTION_OPTIONS: FilterOption[] = [
-  { label: "Section A", value: "A" },
-  { label: "Section B", value: "B" },
-];
-const PR_OPTIONS: FilterOption[] = [
-  { label: "Placement ready (PR)", value: "PR" },
-  { label: "Not ready (NPR)", value: "NPR" },
-];
-const PROJECT_OPTIONS: FilterOption[] = [
-  { label: "Has approved projects", value: "has-project" },
-  { label: "No approved projects", value: "no-project" },
-  { label: "Project score below 60%", value: "score-below-60" },
-  { label: "Project score 60% or higher", value: "score-at-least-60" },
-];
 const SORT_OPTIONS: FilterOption[] = [
-  { label: "Average · high to low", value: "avg-desc" },
-  { label: "Average · low to high", value: "avg-asc" },
-  { label: "CGPA · high to low", value: "cgpa-desc" },
-  { label: "Name · A to Z", value: "name-asc" },
+  { label: "Name: A to Z", value: "name-asc" },
+  { label: "Name: Z to A", value: "name-desc" },
+  { label: "CGPA: High to Low", value: "cgpa-desc" },
+  { label: "CGPA: Low to High", value: "cgpa-asc" },
 ];
 
-const DEFAULT_SORT = "avg-desc";
-
-interface StudentRow {
-  id: string;
-  name: string;
-  email: string;
-  rollNumber: string;
-  batch: string;
-  section: string;
-  cgpa: number;
-  dsa: number;
-  coreCs: number;
-  development: number;
-  communication: number;
-  average: number;
-  prStatus: "PR" | "NPR";
-}
-
-function toRow(student: Student, skills: Skill[]): StudentRow {
-  const dScores = domainScores(student, skills);
-  const getDomainScore = (sub: string) => {
-    const f = dScores.find((d) => d.domain.toLowerCase().includes(sub.toLowerCase()));
-    return f ? f.score : 0;
-  };
-  const s = student.scores ?? {};
-  const dsa = s["dsa"] ?? getDomainScore("programming") ?? 0;
-  const coreCs = getDomainScore("core") || (s["dbms"] ?? 0);
-  const development = getDomainScore("development") || (s["spring_boot"] ?? s["java"] ?? 0);
-  const communication = getDomainScore("soft") || getDomainScore("communication") || (s["comm"] ?? 0);
-
-  return {
-    id: student.id,
-    name: student.name,
-    email: student.email,
-    rollNumber: student.rollNumber,
-    batch: student.batch,
-    section: student.section,
-    cgpa: student.cgpa,
-    dsa,
-    coreCs,
-    development,
-    communication,
-    average: student.average,
-    prStatus: student.prStatus,
-  };
-}
+const DEFAULT_SORT = "name-asc";
+const VALID_SORTS = new Set(SORT_OPTIONS.map(option => option.value));
 
 export default function StudentsPage() {
   const navigate = useAppStore((s) => s.navigate);
-  const students = useAppStore((s) => s.students);
   const batches = useAppStore((s) => s.batches);
-  const skills = useAppStore((s) => s.skills);
-  const isRefreshing = useAppStore((s) => s.isRefreshing);
-
-  const batchOptions = useMemo(() => batches.map((b) => ({ label: b.name, value: b.name })), [batches]);
-  const domainOptions = useMemo<FilterOption[]>(
-    () => domainGroups(skills).map((g) => ({ label: g.label, value: g.label })),
-    [skills]
-  );
-
-  /* ------------------------------ filters ------------------------------ */
-  const [query, setQuery] = useState("");
-  const [batch, setBatch] = useState("all");
-  const [section, setSection] = useState("all");
-  const [pr, setPr] = useState("all");
-  const [domain, setDomain] = useState("all");
-  const [projectFilter, setProjectFilter] = useState("all");
-  const [sort, setSort] = useState(DEFAULT_SORT);
-  const [page, setPage] = useState(1);
-
-  const loading = isRefreshing && students.length === 0;
-
-  const filtersActive =
-    query.trim() !== "" ||
-    batch !== "all" ||
-    section !== "all" ||
-    pr !== "all" ||
-    domain !== "all" ||
-    projectFilter !== "all";
-
-  const resetFilters = () => {
-    setQuery("");
-    setBatch("all");
-    setSection("all");
-    setPr("all");
-    setDomain("all");
-    setProjectFilter("all");
-    setSort(DEFAULT_SORT);
-    setPage(1);
+  const columns = useSubjectColumns();
+  const { visible } = columns;
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const batch = searchParams.get("batch") ?? "all";
+  const section = searchParams.get("section") ?? "all";
+  const pr = searchParams.get("pr") ?? "all";
+  const domain = searchParams.get("domain") ?? "all";
+  const projectFilter = searchParams.get("project") ?? "all";
+  const requestedSort = searchParams.get("sort");
+  const sort = requestedSort && VALID_SORTS.has(requestedSort) ? requestedSort : DEFAULT_SORT;
+  const pageValue = Number(searchParams.get("page") ?? 1);
+  const page = Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : 1;
+  const [result, setResult] = useState<{ items: Student[]; total: number; page: number }>({ items: [], total: 0, page: 1 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const batchOptions = useMemo(() => batches.map(b => ({ label: b.name, value: b.name })), [batches]);
+  const filters = readStudentFilters(new URLSearchParams(searchParams.toString()));
+  const sectionOptions = useMemo<FilterOption[]>(() => [...new Set(batches.flatMap(b => b.sections))].sort().map(s => ({ label: `Section ${s}`, value: s })), [batches]);
+  const applyFilters = (nextFilters: StudentFilters) => router.push(`${pathname}?${applyStudentFilters(new URLSearchParams(searchParams.toString()), nextFilters)}`, { scroll: false });
+  const updateQuery = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (!value || value === "all") next.delete(key); else next.set(key, value);
+    if (key !== "page") next.delete("page");
+    router.push(`${pathname}?${next}`, { scroll: false });
   };
-
-  /* any filter interaction restarts pagination from the first page */
-  const applyFilter =
-    (setter: (v: string) => void) =>
-      (v: string): void => {
-        setter(v);
-        setPage(1);
-      };
-
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let list = students;
-    if (q) {
-      list = list.filter(
-        (s) => s.name.toLowerCase().includes(q) || s.rollNumber.toLowerCase().includes(q),
-      );
-    }
-    if (batch !== "all") list = list.filter((s) => s.batch === batch);
-    if (section !== "all") list = list.filter((s) => s.section === section);
-    if (pr !== "all") list = list.filter((s) => s.prStatus === pr);
-    if (domain !== "all") {
-      list = list.filter((s) => studentDomainScore(s, domain, skills) < 60);
-    }
-    if (projectFilter === "has-project") {
-      list = list.filter((s) => (s.approvedProjectCount ?? (s.projectScore == null ? 0 : 1)) > 0);
-    } else if (projectFilter === "no-project") {
-      list = list.filter((s) => (s.approvedProjectCount ?? (s.projectScore == null ? 0 : 1)) === 0);
-    } else if (projectFilter === "score-below-60") {
-      list = list.filter((s) => s.projectScore != null && s.projectScore < 60);
-    } else if (projectFilter === "score-at-least-60") {
-      list = list.filter((s) => s.projectScore != null && s.projectScore >= 60);
-    }
-    const mapped = list.map((s) => toRow(s, skills));
-    switch (sort) {
-      case "avg-asc":
-        return mapped.sort((a, b) => a.average - b.average);
-      case "cgpa-desc":
-        return mapped.sort((a, b) => b.cgpa - a.cgpa);
-      case "name-asc":
-        return mapped.sort((a, b) => a.name.localeCompare(b.name));
-      default:
-        return mapped.sort((a, b) => b.average - a.average);
-    }
-  }, [students, query, batch, section, pr, domain, projectFilter, sort, skills]);
-
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const filtersActive = !!query || [batch, section, pr, domain, projectFilter].some(v => v !== "all");
+  const resetFilters = () => router.push(pathname, { scroll: false });
+  const setPage = (value: number) => updateQuery("page", String(value));
+  useEffect(() => {
+    if (requestedSort === sort) return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("sort", sort);
+    router.replace(`${pathname}?${next}`, { scroll: false });
+  }, [requestedSort, sort, searchParams, router, pathname]);
+  useEffect(() => {
+    let live = true;
+    setLoading(true); setError(null);
+    const optional = (value: string) => value === "all" ? undefined : value;
+    const sorts: Record<string, string> = { "name-asc": "name_asc", "name-desc": "name_desc", "cgpa-desc": "cgpa_desc", "cgpa-asc": "cgpa_asc" };
+    // Debounce typing and discard responses for superseded URL states.
+    const timer = setTimeout(() => {
+      void api.listStudents({ q: query, batchId: optional(batch), section: optional(section), prStatus: optional(pr), domainId: optional(domain), projectFilter: optional(projectFilter), sort: sorts[sort], page, pageSize: PAGE_SIZE })
+        .then(response => {
+          if (!live) return;
+          setResult(response);
+          if (response.page !== page || (searchParams.has("page") && searchParams.get("page") !== String(page))) {
+            const next = new URLSearchParams(searchParams.toString()); next.set("page", String(response.page));
+            router.replace(`${pathname}?${next}`, { scroll: false });
+          }
+        })
+        .catch(err => { if (live) setError(err instanceof Error ? err.message : "Unable to load students."); })
+        .finally(() => { if (live) setLoading(false); });
+    }, 180);
+    return () => { live = false; clearTimeout(timer); };
+  }, [query, batch, section, pr, domain, projectFilter, sort, page, retry, searchParams, router, pathname]);
+  const pageRows = result.items;
+  const currentPage = result.page;
+  const pageCount = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Students"
-        subtitle={`${students.length} enrolled students across ${batches.length} active batches.`}
+        subtitle={`${result.total} matching students across ${batches.length} batches.`}
         actions={
           <Button
             variant="outline"
@@ -202,78 +119,28 @@ export default function StudentsPage() {
 
       <Card className="gap-0 border-border bg-card p-0 shadow-none">
         {/* filter toolbar */}
-        <div className="flex flex-col gap-3 border-b border-border/70 p-5 lg:flex-row lg:items-center">
-          <SearchInput
-            value={query}
-            onChange={applyFilter(setQuery)}
-            placeholder="Search by name or roll number…"
-            className="lg:max-w-xs"
-          />
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:flex xl:flex-1 xl:items-center">
-            <FilterSelect
-              value={batch}
-              onChange={applyFilter(setBatch)}
-              options={batchOptions}
-              allLabel="All batches"
-              ariaLabel="Filter by batch"
-              className="xl:w-[168px]"
-            />
-            <FilterSelect
-              value={section}
-              onChange={applyFilter(setSection)}
-              options={SECTION_OPTIONS}
-              allLabel="All sections"
-              ariaLabel="Filter by section"
-              className="xl:w-[136px]"
-            />
-            <FilterSelect
-              value={pr}
-              onChange={applyFilter(setPr)}
-              options={PR_OPTIONS}
-              allLabel="All statuses"
-              ariaLabel="Filter by placement status"
-              className="xl:w-[164px]"
-            />
-            <FilterSelect
-              value={domain}
-              onChange={applyFilter(setDomain)}
-              options={domainOptions}
-              allLabel="All domains"
-              ariaLabel="Filter by weak domain (score below 60%)"
-              className="xl:w-[180px]"
-            />
-            <FilterSelect
-              value={projectFilter}
-              onChange={applyFilter(setProjectFilter)}
-              options={PROJECT_OPTIONS}
-              allLabel="All projects"
-              ariaLabel="Filter by approved projects and project score"
-              className="xl:w-[200px]"
-            />
-            <FilterSelect
-              value={sort}
-              onChange={setSort}
-              options={SORT_OPTIONS}
-              ariaLabel="Sort students"
-              className="xl:w-[188px]"
-            />
+        <div className="flex flex-wrap items-center gap-3 border-b border-border/70 p-4 sm:p-5">
+          <SearchInput value={query} onChange={value => updateQuery("q", value)} placeholder="Search by name or roll number" className="min-w-[200px] flex-1 sm:max-w-md" />
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            <Select value={sort} onValueChange={value => updateQuery("sort", value)}>
+              <SelectTrigger aria-label="Sort students" className="h-9 w-[195px] text-sm">
+                <SelectValue>{SORT_OPTIONS.find(option => option.value === sort)?.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {SORT_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <StudentFilterPanel filters={filters} apply={applyFilters} batches={batchOptions} sections={sectionOptions} columns={columns} />
           </div>
-          {filtersActive && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={resetFilters}
-              className="h-9 self-start px-2 text-xs text-muted-foreground hover:text-foreground lg:self-auto"
-            >
-              Reset
-            </Button>
-          )}
+          {studentFilterKeys.some(key => filters[key] !== "all") && <div className="flex w-full flex-wrap gap-2" aria-label="Applied filters">
+            {studentFilterKeys.filter(key => filters[key] !== "all").map(key => <Button key={key} variant="secondary" size="sm" className="h-7 max-w-full text-xs" onClick={() => applyFilters({ ...filters, [key]: "all" })} aria-label={`Remove ${key} filter: ${filters[key]}`}><span className="truncate">{key}: {filters[key]}</span><span aria-hidden> x</span></Button>)}
+          </div>}
         </div>
 
         {/* content */}
-        {loading ? (
+        {error ? (<div role="alert" className="p-5 text-danger">{error} <Button variant="outline" onClick={() => setRetry(n => n + 1)}>Retry</Button></div>) : loading ? (
           <TableSkeleton rows={8} />
-        ) : rows.length === 0 ? (
+        ) : result.total === 0 ? (
           <EmptyState
             icon={UsersRound}
             title="No students found"
@@ -296,10 +163,7 @@ export default function StudentsPage() {
                     <th className="px-2 py-2.5">Roll No</th>
                     <th className="px-2 py-2.5">Batch</th>
                     <th className="px-2 py-2.5">CGPA</th>
-                    <th className="px-2 py-2.5">DSA</th>
-                    <th className="px-2 py-2.5">Core CS</th>
-                    <th className="px-2 py-2.5">Dev</th>
-                    <th className="px-2 py-2.5">Comm</th>
+                    {visible.map(subject => <th key={subject.id} className="whitespace-nowrap px-2 py-2.5">{subject.name}</th>)}
                     <th className="px-2 py-2.5">Average</th>
                     <th className="px-2 py-2.5">Status</th>
                     <th className="py-2.5 pl-2 pr-5 text-right">Action</th>
@@ -329,10 +193,7 @@ export default function StudentsPage() {
                         </span>
                       </td>
                       <td className="tabular px-2 py-2.5 text-[13px] font-medium text-foreground">{r.cgpa.toFixed(1)}</td>
-                      <td className="px-2 py-2.5"><MiniBar value={r.dsa} width={36} /></td>
-                      <td className="px-2 py-2.5"><MiniBar value={r.coreCs} width={36} /></td>
-                      <td className="px-2 py-2.5"><MiniBar value={r.development} width={36} /></td>
-                      <td className="px-2 py-2.5"><MiniBar value={r.communication} width={36} /></td>
+                      {visible.map(subject => <td key={subject.id} className="px-2 py-2.5">{r.scores[subject.id] === undefined ? <span className="text-muted-foreground">-</span> : <MiniBar value={r.scores[subject.id]} width={36} />}</td>)}
                       <td className="px-2 py-2.5"><MiniBar value={r.average} /></td>
                       <td className="px-2 py-2.5"><PRBadge status={r.prStatus} /></td>
                       <td className="py-2.5 pl-2 pr-5 text-right">
@@ -356,7 +217,7 @@ export default function StudentsPage() {
             <TablePagination
               page={currentPage}
               pageCount={pageCount}
-              total={rows.length}
+              total={result.total}
               onPageChange={setPage}
             />
           </>

@@ -21,12 +21,7 @@ function validateUsername(platform, value) {
   if (typeof value !== "string") return null;
   const username = value.trim();
   if (platform === "GITHUB") {
-    return username.length >= 1 &&
-      username.length <= 39 &&
-      /^[a-zA-Z0-9-]+$/.test(username) &&
-      !username.startsWith("-") &&
-      !username.endsWith("-") &&
-      !username.includes("--")
+    return /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(username)
       ? username.toLowerCase()
       : null;
   }

@@ -87,12 +87,13 @@ async function buildStudentResponseObject(db, studentRow) {
   const studentId = studentRow.student_id;
   const projectScoreData = await getStudentProjectScore(db, studentId);
   const ratingsRes = await db.query(
-    `SELECT st.skill_id, st.skill_code, st.domain_category,
+    `SELECT st.skill_id, st.skill_code, d.name AS domain_name,
             ROUND(AVG(sr.score_percentage), 1) AS avg_score
      FROM skill_ratings sr
      JOIN skill_taxonomy st ON st.skill_id = sr.skill_id
+     JOIN evaluation_domains d ON d.domain_id = st.domain_id
      WHERE sr.student_id = $1 AND st.deleted_at IS NULL
-     GROUP BY st.skill_id, st.skill_code, st.domain_category`,
+     GROUP BY st.skill_id, st.skill_code, d.domain_id, d.name`,
     [studentId]
   );
 
@@ -102,7 +103,7 @@ async function buildStudentResponseObject(db, studentRow) {
     const val = Number(r.avg_score);
     scores[r.skill_code] = val;
     scores[String(r.skill_id)] = val;
-    domainBuckets[r.domain_category] = [...(domainBuckets[r.domain_category] || []), val];
+    domainBuckets[r.domain_name] = [...(domainBuckets[r.domain_name] || []), val];
   }
 
   const domainAverages = {};

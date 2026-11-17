@@ -1,17 +1,9 @@
 import type { Skill, Student } from "@/types";
 
-const KNOWN_SKILL_NAMES: Record<string, { name: string; domain: string }> = {
-  dsa: { name: "DSA", domain: "Programming & Problem Solving" },
-  dbms: { name: "DBMS", domain: "Core Computer Science" },
-  os: { name: "Operating Systems", domain: "Core Computer Science" },
-  cn: { name: "Computer Networks", domain: "Core Computer Science" },
-  oops: { name: "OOPS", domain: "Core Computer Science" },
-  java: { name: "Java", domain: "Software Development" },
-  springboot: { name: "Spring Boot", domain: "Software Development" },
-  spring_boot: { name: "Spring Boot", domain: "Software Development" },
-  comm: { name: "Communication", domain: "Employability & Soft Skills" },
-  sysdesign: { name: "System Design", domain: "Software Development" },
-  aptitude: { name: "Aptitude", domain: "Employability & Soft Skills" },
+const KNOWN_SKILL_NAMES: Record<string, string> = {
+  dsa: "DSA", dbms: "DBMS", os: "Operating Systems", cn: "Computer Networks", oops: "OOPS",
+  java: "Java", springboot: "Spring Boot", spring_boot: "Spring Boot", comm: "Communication",
+  sysdesign: "System Design", aptitude: "Aptitude",
 };
 
 export const findSkill = (skills: Skill[] = [], id: string): Skill | undefined => {
@@ -29,39 +21,18 @@ export const findSkill = (skills: Skill[] = [], id: string): Skill | undefined =
 export const skillName = (skills: Skill[] = [], id: string): string => {
   const found = findSkill(skills, id);
   if (found) return found.name;
-  if (KNOWN_SKILL_NAMES[id.toLowerCase()]) return KNOWN_SKILL_NAMES[id.toLowerCase()].name;
+  if (KNOWN_SKILL_NAMES[id.toLowerCase()]) return KNOWN_SKILL_NAMES[id.toLowerCase()];
   return id || "Unknown skill";
 };
 
 export const skillDomain = (skills: Skill[] = [], id: string): string => {
   const found = findSkill(skills, id);
   if (found) return found.domain;
-  if (KNOWN_SKILL_NAMES[id.toLowerCase()]) return KNOWN_SKILL_NAMES[id.toLowerCase()].domain;
   return "General";
-};
-
-export const isCoreCsSkill = (skillOrId: Skill | string, skills: Skill[] = []): boolean => {
-  const domain = typeof skillOrId === "string" ? skillDomain(skills, skillOrId) : skillOrId.domain;
-  const id = typeof skillOrId === "string" ? skillOrId.toLowerCase() : skillOrId.id.toLowerCase();
-  const dLower = domain.toLowerCase();
-  return (
-    dLower.includes("core") ||
-    dLower.includes("programming") ||
-    dLower.includes("dsa") ||
-    ["dsa", "dbms", "os", "cn", "oops"].includes(id)
-  );
 };
 
 export const domainGroups = (skills: Skill[] = []): { label: string; skills: string[] }[] => {
   const domains = [...new Set(skills.map((s) => s.domain).filter(Boolean))];
-  if (domains.length === 0) {
-    return [
-      { label: "Programming & Problem Solving", skills: ["dsa"] },
-      { label: "Core Computer Science", skills: ["dbms"] },
-      { label: "Software Development", skills: ["spring_boot"] },
-      { label: "Employability & Soft Skills", skills: ["comm"] },
-    ];
-  }
   return domains.map((label) => ({
     label,
     skills: skills.filter((s) => s.domain === label).map((s) => s.id),
@@ -138,15 +109,6 @@ export const domainScores = (
 
   const entries = skillEntries(student, skills);
   const domains = [...new Set(skills.map((s) => s.domain).concat(entries.map((e) => e.domain)))].filter(Boolean);
-
-  if (domains.length === 0) {
-    return [
-      { domain: "Programming & Problem Solving", score: student.scores["dsa"] ?? 0 },
-      { domain: "Core Computer Science", score: student.scores["dbms"] ?? 0 },
-      { domain: "Software Development", score: student.scores["spring_boot"] ?? 0 },
-      { domain: "Employability & Soft Skills", score: student.scores["comm"] ?? 0 },
-    ];
-  }
 
   return domains.map((domain) => {
     const vals = entries.filter((e) => e.domain.toLowerCase() === domain.toLowerCase()).map((e) => e.score);

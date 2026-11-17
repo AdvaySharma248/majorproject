@@ -1,4 +1,4 @@
-import type { AppUser, Assessment, AuditLog, Batch, Company, MatchResult, SessionUser, Skill, Student, TrainerFeedback } from "@/types";
+import type { AppUser, Assessment, AuditLog, Batch, Company, EvaluationDomain, MatchResult, Role, SessionUser, Skill, Student, TrainerFeedback } from "@/types";
 import { logger } from "@/lib/logger";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
@@ -60,6 +60,22 @@ export type StudentAssessment = {
 };
 
 export type ProfilePlatform = "GITHUB";
+
+export type GithubCalendar = {
+  from: string; to: string; totalContributions: number; includesSharedPrivateCounts: boolean;
+  currentStreak: number; currentStreakAtLeast: boolean; longestStreak: number;
+  days: { date: string; count: number; level: number }[];
+};
+export type GithubStatisticsResponse = {
+  profile: {
+    username: string; profileUrl: string; avatarUrl: string;
+    publicRepositories: number; followers: number;
+    languages: { name: string; repositories: number }[];
+    sampledRepositoryCount: number; repositorySampleLimit: number;
+    calendar: GithubCalendar | null; calendarUnavailable: string | null; calendarErrorCode?: string | null;
+  } | null;
+  fetchedAt?: string; stale?: boolean; verificationStatus?: string;
+};
 
 export type ProfileChallenge = {
   token: string;
@@ -153,9 +169,10 @@ export const api = {
   // Import validation needs the full roster, not just the first page of students.
   students: () => request<{ items: Student[] }>("/students?pageSize=1000"),
   // Paged roster for a single batch (used by the import wizard).
-  listStudents: (p: { batchId?: string; page?: number; pageSize?: number; q?: string }) =>
+  listStudents: (p: { batchId?: string; page?: number; pageSize?: number; q?: string; section?: string; prStatus?: string; domainId?: string; projectFilter?: string; sort?: string }) =>
     request<Paginated<Student>>(`/students${qs(p)}`),
   student: (id: string) => request<Student>(`/students/${id}`),
+  studentGithubStatistics: (id: string) => request<GithubStatisticsResponse>(`/students/${encodeURIComponent(id)}/github-statistics`),
   studentAssessments: (id: string) => request<Paginated<StudentAssessment>>(`/students/${id}/assessments`),
   studentFeedback: (id: string) => request<TrainerFeedback[]>(`/students/${id}/feedback`),
   myStudent: () => request<Student>("/me/student"),
@@ -214,7 +231,8 @@ export const api = {
   deleteCompany: (id: string) => request<void>(`/companies/${id}`, { method: "DELETE" }),
   companyMatches: (id: string, payload: unknown) =>
     request<{ items: MatchResult[]; page: number; pageSize: number; total: number }>(`/companies/${id}/matches`, json("POST", payload)),
-  users: async () => pageItems(await request<{ items: AppUser[] }>("/users?pageSize=100")),
+  users: async (params: { q?: string; role?: Role; status?: "active" | "inactive"; page?: number; pageSize?: number } = {}) =>
+    pageItems(await request<Paginated<AppUser>>("/users" + qs({ pageSize: 100, ...params }))),
   createUser: (payload: Partial<AppUser>) => request<AppUser>("/users", json("POST", payload)),
   updateUser: (id: string, payload: Partial<AppUser>) => request<AppUser>(`/users/${id}`, json("PATCH", payload)),
   batches: () => request<Batch[]>("/batches"),
@@ -224,6 +242,12 @@ export const api = {
   createBatch: (payload: Omit<Batch, "id" | "studentCount"> | Batch) => request<Batch>("/batches", json("POST", payload)),
   updateBatch: (id: string, payload: Partial<Batch>) => request<Batch>(`/batches/${id}`, json("PATCH", payload)),
   batchStats: (id: string) => request<unknown>(`/batches/${id}/stats`),
+  subjectColumns: () => request<{ columns: Record<string, boolean> | null }>("/me/subject-columns"),
+  saveSubjectColumns: (payload: { columns?: Record<string, boolean>; reset?: boolean }) => request<{ columns: Record<string, boolean> | null }>("/me/subject-columns", json("PATCH", payload)),
+  domains: () => request<EvaluationDomain[]>("/domains"),
+  createDomain: (payload: Omit<EvaluationDomain, "id" | "parameterCount">) => request<EvaluationDomain>("/domains", json("POST", payload)),
+  updateDomain: (id: string, payload: Partial<Omit<EvaluationDomain, "id" | "parameterCount">>) => request<EvaluationDomain>(`/domains/${encodeURIComponent(id)}`, json("PATCH", payload)),
+  deleteDomain: (id: string) => request<void>(`/domains/${encodeURIComponent(id)}`, { method: "DELETE" }),
   skills: () => request<Skill[]>("/skills"),
   // Filtered skill list (e.g. active only).
   listSkills: async (p: { q?: string; domain?: string; active?: boolean } = {}) =>

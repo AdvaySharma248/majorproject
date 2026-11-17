@@ -40,7 +40,7 @@ BEGIN
         batch_record.name,
         'CSE',
         CASE WHEN student_number <= 50 THEN 'A' ELSE 'B' END,
-        ROUND((6.00 + ((student_number % 31) / 10.0))::NUMERIC, 2),
+        ROUND((6.00 + ((student_number % 36) / 10.0))::NUMERIC, 2),
         ROUND((55.00 + ((student_number * 7) % 41))::NUMERIC, 2),
         CASE WHEN student_number % 3 = 0 THEN 'PR'::readiness_status ELSE 'NPR'::readiness_status END
       FROM academic_batches ab

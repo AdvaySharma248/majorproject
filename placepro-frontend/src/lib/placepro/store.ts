@@ -13,6 +13,7 @@ import type {
   Assessment,
   Batch,
   Company,
+  EvaluationDomain,
   ImportedSource,
   Page,
   Route,
@@ -21,6 +22,7 @@ import type {
   TrainerFeedback,
 } from "@/types";
 import { api, ApiError } from "./api";
+import { canVisit, routeHref, pushNavigation } from "./routing";
 import { logger } from "@/lib/logger";
 
 export interface MatchableAssessment {
@@ -39,6 +41,7 @@ interface AppState {
 
   /* domain data */
   skills: Skill[];
+  domains: EvaluationDomain[];
   companies: Company[];
   users: AppUser[];
   batches: Batch[];
@@ -49,6 +52,7 @@ interface AppState {
   auditLogs: import("@/types").AuditLog[];
   dashboard: import("./api").DashboardData | null;
   isRefreshing: boolean;
+  rosterLoaded: boolean;
   dataError: string | null;
 
   /* actions */
@@ -56,6 +60,7 @@ interface AppState {
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
   refreshData: () => Promise<void>;
+  setDomains: (domains: EvaluationDomain[]) => void;
   navigate: (page: Page, params?: Record<string, string>) => void;
   setSidebarPinned: (pinned: boolean) => void;
   openDialog: (dialog: "help" | "settings") => void;
@@ -79,12 +84,6 @@ interface AppState {
   markAssessmentReviewed: (id: string) => Promise<void>;
 }
 
-const HOME_PAGE: Record<SessionUser["role"], Page> = {
-  trainer: "dashboard",
-  admin: "dashboard",
-  student: "dashboard",
-};
-
 export const useAppStore = create<AppState>((set) => ({
   user: null,
   route: { page: "dashboard" },
@@ -92,6 +91,7 @@ export const useAppStore = create<AppState>((set) => ({
   uiDialog: null,
 
   skills: [],
+  domains: [],
   companies: [],
   users: [],
   batches: [],
@@ -102,12 +102,13 @@ export const useAppStore = create<AppState>((set) => ({
   auditLogs: [],
   dashboard: null,
   isRefreshing: false,
+  rosterLoaded: false,
   dataError: null,
 
   login: async (email, password) => {
     try {
       const { user } = await api.login(email, password);
-      set({ user, route: { page: HOME_PAGE[user.role] } });
+      set({ user });
       await useAppStore.getState().refreshData();
       return { ok: true };
     } catch (error) {
@@ -117,13 +118,13 @@ export const useAppStore = create<AppState>((set) => ({
 
   logout: async () => {
     try { await api.logout(); } catch { /* Clear the local session even when the gateway is unavailable. */ }
-    set({ user: null, route: { page: "dashboard" }, students: [], assessments: [], feedback: [], skills: [], batches: [], companies: [], users: [], auditLogs: [], dashboard: null });
+    set({ user: null, rosterLoaded: false, route: { page: "dashboard" }, students: [], assessments: [], feedback: [], skills: [], domains: [], batches: [], companies: [], users: [], auditLogs: [], dashboard: null });
   },
 
   restoreSession: async () => {
     try {
       const { user } = await api.me();
-      set({ user, route: { page: HOME_PAGE[user.role] } });
+      set({ user });
       await useAppStore.getState().refreshData();
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) logger.warn("session.restore_failed", { error: error instanceof Error ? error.message : String(error) });
@@ -137,18 +138,20 @@ export const useAppStore = create<AppState>((set) => ({
     set({ isRefreshing: true, dataError: null });
     try {
       if (user.role === "student") {
-        const [student, assessmentResponse, feedback, skills] = await Promise.all([api.myStudent(), api.myAssessments(), api.myFeedback(), api.skills()]);
+        const [student, assessmentResponse, feedback, skills, domains] = await Promise.all([api.myStudent(), api.myAssessments(), api.myFeedback(), api.skills(), api.domains()]);
         const assessments = assessmentResponse.items.map((item) => ({
           id: item.assessmentId, name: item.name, type: item.type, batch: student.batch, date: item.date,
           uploadedBy: "", reviewed: true,
           results: [{ studentId: student.id, marks: item.marks, maxMarks: item.maxMarks, percentage: item.percentage }],
         }));
-        set({ assessments, feedback, students: [student], skills, auditLogs: [], dashboard: { role: "student" }, isRefreshing: false });
+        set({ assessments, feedback, students: [student], skills, domains, auditLogs: [], dashboard: { role: "student" }, isRefreshing: false });
         return;
       }
-      const [studentsResponse, assessments, companies, batches, skills, dashboard] = await Promise.all([
-        api.students(), api.assessments(), api.companies(), api.batches(), api.skills(), api.dashboard(),
+      const needsRoster = typeof window === "undefined" || window.location.pathname !== "/trainer/students";
+      const [studentsResponse, assessments, companies, batches, skills, dashboard, domains] = await Promise.all([
+        needsRoster ? api.students() : Promise.resolve({ items: useAppStore.getState().students }), api.assessments(), api.companies(), api.batches(), api.skills(), api.dashboard(), api.domains(),
       ]);
+      if (needsRoster) set({ rosterLoaded: true });
       const normalizedAssessments = assessments.map((item) => ({
         ...item,
         batch: (item as Assessment & { batchId?: string }).batch ?? (item as Assessment & { batchId?: string }).batchId ?? "Unassigned",
@@ -157,9 +160,9 @@ export const useAppStore = create<AppState>((set) => ({
       }));
       if (user.role === "admin") {
         const [users, auditResponse] = await Promise.all([api.users(), api.auditLogs()]);
-        set({ users, feedback: [], importedSources: [], assessments: normalizedAssessments, companies, batches, skills, students: studentsResponse.items, auditLogs: auditResponse.items, dashboard, isRefreshing: false });
+        set({ users, feedback: [], importedSources: [], assessments: normalizedAssessments, companies, batches, skills, domains, students: studentsResponse.items, auditLogs: auditResponse.items, dashboard, isRefreshing: false });
       } else {
-        set({ feedback: [], importedSources: [], assessments: normalizedAssessments, companies, batches, skills, students: studentsResponse.items, auditLogs: [], dashboard, isRefreshing: false });
+        set({ feedback: [], importedSources: [], assessments: normalizedAssessments, companies, batches, skills, domains, students: studentsResponse.items, auditLogs: [], dashboard, isRefreshing: false });
       }
       // Keep the call here so all authorised data sources are exercised; student-dependent views fetch details by id.
       void studentsResponse;
@@ -170,11 +173,11 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   navigate: (page, params) => {
-    set({ route: { page, params } });
-    if (typeof window !== "undefined") {
-      window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-    }
+    const user = useAppStore.getState().user;
+    if (user && canVisit(user.role, page)) pushNavigation(routeHref(user.role, page, params));
   },
+
+  setDomains: (domains) => set({ domains }),
 
   setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
 
@@ -227,9 +230,11 @@ export function routeLabels(route: Route, role: SessionUser["role"]): string[] {
     "my-performance": ["Student Portal", "My Performance"],
     "my-feedback": ["Student Portal", "Interview Feedback"],
     "my-profile": ["Student Portal", "My Profile"],
+    "profile-intelligence": ["Student Portal", "Profile Intelligence"],
     users: ["Administration", "User Management"],
     batches: ["Administration", "Batch Management"],
     skills: ["Administration", "Skills & Parameters"],
+    domains: ["Administration", "Manage Domains"],
     companies: ["Administration", "Company Requirements"],
     audit: ["Administration", "Audit Logs"],
   };
@@ -248,9 +253,11 @@ export function pageTitle(route: Route): string {
     "my-performance": "My Performance",
     "my-feedback": "Interview Feedback",
     "my-profile": "My Profile",
+    "profile-intelligence": "Profile Intelligence",
     users: "User Management",
     batches: "Batch Management",
     skills: "Skills & Parameters",
+    domains: "Manage Domains",
     companies: "Company Requirements",
     audit: "Audit Logs",
   };

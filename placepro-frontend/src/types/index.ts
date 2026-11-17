@@ -10,21 +10,27 @@ export type PRStatus = "PR" | "NPR";
 
 export type AssessmentType = "exam" | "mock-interview";
 
-export const SKILL_DOMAINS = [
-  "Programming / DSA",
-  "Core Computer Science",
-  "Software Development",
-  "Communication / Soft Skills",
-] as const;
+export type SkillDomain = string;
 
-export type SkillDomain = (typeof SKILL_DOMAINS)[number] | string;
+export interface EvaluationDomain {
+  id: string;
+  code: string | null;
+  name: string;
+  description: string;
+  active: boolean;
+  parameterCount: number;
+}
 
 export type ParameterType = "numeric" | "text";
 
 export interface Skill {
+  code?: string;
+  numericId?: string;
+  defaultVisible?: boolean;
   id: string;
   name: string;
   domain: SkillDomain;
+  domainId?: string;
   description: string;
   parameterType: ParameterType;
   active: boolean;
@@ -44,6 +50,8 @@ export interface Student {
   domainAverages?: Record<string, number>;
   average: number;
   prStatus: PRStatus;
+  projectScore?: number | null;
+  approvedProjectCount?: number;
   /** chronological average % across recent assessments */
   trend: number[];
 }
@@ -106,6 +114,7 @@ export interface TrainerFeedback {
 
 export interface CompanyCriterion {
   skillId: string;
+  type?: "PROJECT_SCORE";
   minCutoff: number;
   weightage: number; // 0 - 1
   mandatory: boolean;
@@ -126,7 +135,6 @@ export interface AppUser {
   email: string;
   role: Role;
   status: "active" | "inactive";
-  lastActive: string;
   batch?: string;
 }
 
@@ -187,9 +195,11 @@ export type Page =
   | "my-performance"
   | "my-feedback"
   | "my-profile"
+  | "profile-intelligence"
   | "users"
   | "batches"
   | "skills"
+  | "domains"
   | "companies"
   | "audit";
 

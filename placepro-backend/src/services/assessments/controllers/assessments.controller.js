@@ -6,7 +6,7 @@ const { recomputeAndSyncStudentReadiness } = require("../../../utils/student-met
 const { requireAuth, requireRole } = require("../../../middleware/auth.middleware");
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); //5mb
 
 router.get("/assessments", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {

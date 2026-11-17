@@ -1,6 +1,6 @@
 "use client";
 
-import { GraduationCap, Lock, UserRound } from "lucide-react";
+import { Code2, GraduationCap, Lock, UserRound } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
 import { skillEntries } from "@/lib/placepro/skill-taxonomy";
 import { PageHeader } from "@/components/placepro/shared/page-header";
@@ -8,12 +8,14 @@ import { EmptyState } from "@/components/placepro/shared/states";
 import { PRBadge } from "@/components/placepro/shared/badges";
 import { InfoRow, UserAvatar } from "@/components/placepro/shared/misc";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 /* ------------------------------------------------------------------ */
 /* My Profile                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function MyProfilePage() {
+  const navigate = useAppStore((s) => s.navigate);
   const user = useAppStore((s) => s.user);
   const students = useAppStore((s) => s.students);
   const assessments = useAppStore((s) => s.assessments);
@@ -36,7 +38,15 @@ export default function MyProfilePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="My Profile" subtitle="Your enrolment record as maintained by the placement cell." />
+      <PageHeader
+        title="My Profile"
+        subtitle="Your enrolment record as maintained by the placement cell."
+        actions={
+          <Button className="h-9 bg-primary hover:bg-primary-hover" onClick={() => navigate("profile-intelligence")}>
+            <Code2 className="size-4" aria-hidden /> Profile Intelligence
+          </Button>
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-3">
         {/* ------------------------- enrolment record ------------------------- */}
@@ -65,12 +75,19 @@ export default function MyProfilePage() {
             <InfoRow label="CGPA">
               <span className="tabular">{student.cgpa}</span>
             </InfoRow>
+            <InfoRow label="Approved project score">
+              <span className="tabular">
+                {student.projectScore === null || student.projectScore === undefined
+                  ? "Not available"
+                  : `${student.projectScore.toFixed(1)}%`}
+              </span>
+            </InfoRow>
             <InfoRow label="Readiness classification">
               <PRBadge status={student.prStatus} />
             </InfoRow>
           </div>
           <p className="px-6 pb-6 pt-4 text-xs leading-relaxed text-muted-foreground">
-            Classification criteria: average ≥ 68% across skills, CGPA ≥ 6.6 and Communication ≥ 58.
+            Classification criteria: skill average ≥ 68%, CGPA ≥ 6.6, Communication ≥ 58%, and an approved project score ≥ 60%.
           </p>
         </Card>
 
@@ -89,6 +106,9 @@ export default function MyProfilePage() {
               </InfoRow>
               <InfoRow label="Skills evaluated">
                 <span className="tabular">{evaluatedSkills.length}</span>
+              </InfoRow>
+              <InfoRow label="Approved projects">
+                <span className="tabular">{student.approvedProjectCount ?? 0}</span>
               </InfoRow>
               <InfoRow label="Readiness">
                 <PRBadge status={student.prStatus} />

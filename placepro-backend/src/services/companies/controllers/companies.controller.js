@@ -137,8 +137,17 @@ router.post("/companies/:companyId/matches", requireAuth, requireRole(["admin", 
     const minCgpa = criteriaOverride?.minCgpa ?? Number(comp.min_cgpa);
     const criteria = criteriaOverride?.criteria ?? comp.criteria_json ?? [];
     const studentsRes = await pool.query(`SELECT * FROM students`);
-    const allStudents = await Promise.all(studentsRes.rows.map((r) => buildStudentResponseObject(pool, r)));
-    const totalWeight = criteria.reduce((acc, c) => acc + Number(c.weightage || 0), 0) || 1;
+
+    const allStudents = await Promise.all(
+      studentsRes.rows.map((r) => 
+        buildStudentResponseObject(pool, r)
+      )
+    );
+    
+    const totalWeight = criteria.reduce(
+      (acc, c) => acc + Number(c.weightage || 0), 
+      0
+    ) || 1;
 
     let evaluated = allStudents.map((stu) => {
       const failedRequirements = [];
@@ -147,10 +156,16 @@ router.post("/companies/:companyId/matches", requireAuth, requireRole(["admin", 
       }
       let weightedSum = 0;
       for (const c of criteria) {
-        const score = stu.scores[c.skillId] ?? 0;
+        const isProjectScore = c.type === "PROJECT_SCORE" || c.skillId === "PROJECT_SCORE";
+        const score = isProjectScore ? (stu.projectScore ?? 0) : (stu.scores[c.skillId] ?? 0);
         weightedSum += score * Number(c.weightage);
         if (c.mandatory && score < c.minCutoff) {
-          failedRequirements.push(`${c.skillId.toUpperCase()} score ${score}% < ${c.minCutoff}%`);
+          if (isProjectScore && stu.projectScore === null) {
+            failedRequirements.push(`PROJECT SCORE is not available (required ${c.minCutoff}%)`);
+          } else {
+            const label = isProjectScore ? "PROJECT SCORE" : c.skillId.toUpperCase();
+            failedRequirements.push(`${label} score ${score}% < ${c.minCutoff}%`);
+          }
         }
       }
       return {

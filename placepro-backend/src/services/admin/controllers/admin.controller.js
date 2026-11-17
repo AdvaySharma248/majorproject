@@ -38,7 +38,6 @@ router.get("/users", requireAuth, requireRole(["admin"]), async (req, res, next)
         email: u.email,
         role: String(u.role).toLowerCase(),
         status: u.status,
-        lastActive: u.last_active ? new Date(u.last_active).toISOString() : null,
       })),
       page: p,
       pageSize: ps,
@@ -220,10 +219,112 @@ router.get("/batches/:batchId/stats", requireAuth, requireRole(["admin", "traine
   }
 });
 
-router.get("/skills", requireAuth, requireRole(["admin", "trainer", "student"]), async (_req, res, next) => {
+function validateDomain(req, res, next) {
+  const body = req.body;
+  const invalid = (message) => res.status(400).json({ error: { code: "VALIDATION", message } });
+  if ((req.method === "POST" || body.name !== undefined) &&
+      (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 100)) {
+    return invalid("Domain name must contain 1-100 characters.");
+  }
+  if (body.name !== undefined) body.name = body.name.trim();
+  if (body.description !== undefined && (typeof body.description !== "string" || body.description.length > 2000)) {
+    return invalid("Description must be at most 2000 characters.");
+  }
+  if (body.code !== undefined && body.code !== null) {
+    if (typeof body.code !== "string") return invalid("Domain code must be text.");
+    body.code = body.code.trim();
+    if (body.code && !/^[a-z][a-z0-9_]{0,39}$/.test(body.code)) {
+      return invalid("Domain code must start with a lowercase letter and contain up to 40 lowercase letters, numbers or underscores.");
+    }
+  }
+  if (body.active !== undefined && typeof body.active !== "boolean") return invalid("Active must be a boolean.");
+  next();
+}
+
+function domainDto(row) {
+  return {
+    id: String(row.domain_id), code: row.domain_code, name: row.name,
+    description: row.description || "", active: Boolean(row.is_active),
+    parameterCount: Number(row.parameter_count || 0),
+  };
+}
+
+router.get("/domains", requireAuth, requireRole(["admin", "trainer", "student"]), async (_req, res, next) => {
   try {
+    const { rows } = await pool.query(`SELECT d.domain_id, d.domain_code, d.name, d.description, d.is_active,
+        COUNT(st.skill_id)::int AS parameter_count
+      FROM evaluation_domains d
+      LEFT JOIN skill_taxonomy st ON st.domain_id = d.domain_id
+      GROUP BY d.domain_id
+      ORDER BY d.domain_id`);
+    res.json(rows.map(domainDto));
+  } catch (err) { next(err); }
+});
+
+router.post("/domains", requireAuth, requireRole(["admin"]), validateDomain, async (req, res, next) => {
+  try {
+    const { name, description = "", code, active = true } = req.body;
+    const { rows } = await pool.query(`INSERT INTO evaluation_domains (domain_code, name, description, is_active)
+      VALUES ($1, $2, $3, $4)
+      RETURNING domain_id, domain_code, name, description, is_active, 0::int AS parameter_count`,
+    [code || null, name, description, active]);
+    res.status(201).json(domainDto(rows[0]));
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: { code: "DUPLICATE_DOMAIN", message: "A domain with this name or code already exists." } });
+    next(err);
+  }
+});
+
+router.patch("/domains/:domainId", requireAuth, requireRole(["admin"]), validateDomain, async (req, res, next) => {
+  try {
+    if (!/^[1-9]\d{0,18}$/.test(req.params.domainId) || BigInt(req.params.domainId) > 9223372036854775807n) {
+      return res.status(400).json({ error: { code: "INVALID_DOMAIN_ID", message: "Invalid domain id." } });
+    }
+    const { name, description, code, active } = req.body;
+    const { rows } = await pool.query(`UPDATE evaluation_domains
+      SET name = COALESCE($1, name),
+          description = COALESCE($2, description),
+          domain_code = CASE WHEN $3::boolean THEN NULLIF($4, '') ELSE domain_code END,
+          is_active = COALESCE($5, is_active)
+      WHERE domain_id = $6
+      RETURNING domain_id, domain_code, name, description, is_active,
+        (SELECT COUNT(*)::int FROM skill_taxonomy st WHERE st.domain_id = evaluation_domains.domain_id) AS parameter_count`,
+    [name ?? null, description ?? null, Object.hasOwn(req.body, "code"), code || "", active ?? null, req.params.domainId]);
+    if (!rows.length) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Domain not found." } });
+    res.json(domainDto(rows[0]));
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: { code: "DUPLICATE_DOMAIN", message: "A domain with this name or code already exists." } });
+    next(err);
+  }
+});
+
+router.delete("/domains/:domainId", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+  try {
+    if (!/^[1-9]\d{0,18}$/.test(req.params.domainId) || BigInt(req.params.domainId) > 9223372036854775807n) {
+      return res.status(400).json({ error: { code: "INVALID_DOMAIN_ID", message: "Invalid domain id." } });
+    }
+    const { rows } = await pool.query(`DELETE FROM evaluation_domains d
+      WHERE d.domain_id = $1 AND NOT EXISTS (SELECT 1 FROM skill_taxonomy st WHERE st.domain_id = d.domain_id)
+      RETURNING d.domain_id`, [req.params.domainId]);
+    if (!rows.length) {
+      const exists = await pool.query("SELECT 1 FROM evaluation_domains WHERE domain_id = $1", [req.params.domainId]);
+      if (!exists.rowCount) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Domain not found." } });
+      return res.status(409).json({ error: { code: "DOMAIN_IN_USE", message: "This domain has associated parameters or historical results. Deactivate it instead." } });
+    }
+    res.status(204).send();
+  } catch (err) {
+    if (err.code === "23503") return res.status(409).json({ error: { code: "DOMAIN_IN_USE", message: "This domain is still in use. Deactivate it instead." } });
+    next(err);
+  }
+});
+
+router.get("/skills", requireAuth, requireRole(["admin", "trainer", "student"]), async (req, res, next) => {
+  try {
+    const active = req.query.active === "true" ? true : req.query.active === "false" ? false : null;
     const { rows } = await pool.query(
-      `SELECT * FROM skill_taxonomy WHERE deleted_at IS NULL ORDER BY skill_id ASC`
+      `SELECT st.*, d.name AS domain_name FROM skill_taxonomy st
+       JOIN evaluation_domains d ON d.domain_id = st.domain_id
+       WHERE st.deleted_at IS NULL AND ($1::boolean IS NULL OR st.is_active = $1) ORDER BY st.skill_id ASC`, [active]
     );
 
     res.json(
@@ -231,10 +332,12 @@ router.get("/skills", requireAuth, requireRole(["admin", "trainer", "student"]),
         id: s.skill_code || String(s.skill_id),
         numericId: String(s.skill_id),
         name: s.skill_name,
-        domain: s.domain_category,
+        domain: s.domain_name,
+        domainId: String(s.domain_id),
         description: s.description || "",
         parameterType: s.parameter_type || "numeric",
         active: Boolean(s.is_active),
+        defaultVisible: s.default_visible,
       }))
     );
   } catch (err) {
@@ -242,63 +345,99 @@ router.get("/skills", requireAuth, requireRole(["admin", "trainer", "student"]),
   }
 });
 
-router.post("/skills", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+function validateSkill(req, res, next) {
+  const b = req.body;
+  const invalid = (message) => res.status(400).json({ error: { code: "VALIDATION", message } });
+  if ((req.method === "POST" || b.name !== undefined) && (typeof b.name !== "string" || !b.name.trim() || b.name.trim().length > 80)) return invalid("Subject name must contain 1-80 characters.");
+  if (b.name !== undefined) b.name = b.name.trim();
+  if (b.code !== undefined && (req.method !== "POST" || typeof b.code !== "string" || !/^[a-z][a-z0-9_]{0,39}$/.test(b.code))) return invalid("Subject code must start with a lowercase letter and contain up to 40 lowercase letters, numbers or underscores. Codes cannot be changed after creation.");
+  if (b.description !== undefined && (typeof b.description !== "string" || b.description.length > 5000)) return invalid("Description must be at most 5000 characters.");
+  for (const key of ["active", "defaultVisible"]) if (b[key] !== undefined && typeof b[key] !== "boolean") return invalid(`${key} must be a boolean.`);
+  if (req.method === "POST" && b.domainId === undefined && b.domain === undefined) return invalid("Select a domain for this parameter.");
+  if (b.domainId !== undefined && !/^[1-9]\d{0,18}$/.test(String(b.domainId))) return invalid("Invalid domain id.");
+  if (b.domain !== undefined && (typeof b.domain !== "string" || !b.domain.trim() || b.domain.trim().length > 100)) return invalid("Invalid subject domain.");
+  if (b.parameterType !== undefined && !["numeric", "text"].includes(b.parameterType)) return invalid("Invalid parameter type.");
+  next();
+}
+
+async function resolveSkillDomain(body, currentDomainId = null) {
+  if (body.domainId === undefined && body.domain === undefined) return null;
+  const { rows } = await pool.query(`SELECT domain_id, name FROM evaluation_domains
+    WHERE (domain_id = $1::bigint OR lower(btrim(name)) = lower(btrim($2)))
+      AND (is_active = TRUE OR domain_id = $3::bigint)
+    ORDER BY CASE WHEN domain_id = $1::bigint THEN 0 ELSE 1 END LIMIT 1`,
+  [body.domainId ?? null, body.domain ?? null, currentDomainId]);
+  return rows[0] || null;
+}
+
+function skillDto(skill) {
+  return {
+    id: skill.skill_code,
+    name: skill.skill_name,
+    domain: skill.domain_name,
+    domainId: String(skill.domain_id),
+    description: skill.description || "",
+    parameterType: skill.parameter_type,
+    active: Boolean(skill.is_active),
+    defaultVisible: Boolean(skill.default_visible),
+    numericId: String(skill.skill_id),
+  };
+}
+
+router.post("/skills", requireAuth, requireRole(["admin"]), validateSkill, async (req, res, next) => {
   try {
     const {
       name,
-      domain = "Programming & Problem Solving",
       description = "",
       parameterType = "numeric",
       active = true,
+      defaultVisible = false,
     } = req.body;
-    const code = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const domain = await resolveSkillDomain(req.body);
+    if (!domain) return res.status(400).json({ error: { code: "INVALID_DOMAIN", message: "Select an active domain for this parameter." } });
+    const code = req.body.code || String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+    if (!code) return res.status(400).json({ error: { code: "VALIDATION", message: "Subject name must include letters or numbers for its identifier." } });
 
-    const { rows } = await pool.query(
-      `INSERT INTO skill_taxonomy (skill_code, skill_name, domain_category, description, parameter_type, is_active)
-       VALUES ($1, $2, $3::skill_domain, $4, $5::param_type, $6) RETURNING *`,
-      [code, name, domain, description, parameterType, active]
+    const inserted = await pool.query(
+      `INSERT INTO skill_taxonomy (skill_code, skill_name, domain_id, description, parameter_type, is_active, default_visible)
+       VALUES ($1, $2, $3, $4, $5::param_type, $6, $7) RETURNING skill_id`,
+      [code, name, domain.domain_id, description, parameterType, active, defaultVisible]
     );
-
-    const s = rows[0];
-    res.status(201).json({
-      id: s.skill_code,
-      name: s.skill_name,
-      domain: s.domain_category,
-      description: s.description,
-      parameterType: s.parameter_type,
-      active: s.is_active,
-    });
+    const { rows } = await pool.query(`SELECT st.*, d.name AS domain_name FROM skill_taxonomy st
+      JOIN evaluation_domains d ON d.domain_id = st.domain_id WHERE st.skill_id = $1`, [inserted.rows[0].skill_id]);
+    res.status(201).json(skillDto(rows[0]));
   } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: { code: "DUPLICATE_SUBJECT", message: "A subject with this name or identifier already exists." } });
     next(err);
   }
 });
 
-router.patch("/skills/:skillId", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+router.patch("/skills/:skillId", requireAuth, requireRole(["admin"]), validateSkill, async (req, res, next) => {
   try {
-    const { name, description, active } = req.body;
-    const { rows } = await pool.query(
+    const { name, description, active, defaultVisible, parameterType } = req.body;
+    const current = await pool.query(`SELECT skill_id, domain_id FROM skill_taxonomy
+      WHERE (skill_code = $1 OR CAST(skill_id AS TEXT) = $1) AND deleted_at IS NULL`, [req.params.skillId]);
+    if (!current.rows.length) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Skill not found" } });
+    const domain = await resolveSkillDomain(req.body, current.rows[0].domain_id);
+    if ((req.body.domainId !== undefined || req.body.domain !== undefined) && !domain) {
+      return res.status(400).json({ error: { code: "INVALID_DOMAIN", message: "Select an active domain for this parameter." } });
+    }
+    const updated = await pool.query(
       `UPDATE skill_taxonomy
        SET skill_name = COALESCE($1, skill_name),
            description = COALESCE($2, description),
-           is_active = COALESCE($3, is_active)
-       WHERE skill_code = $4 OR CAST(skill_id AS TEXT) = $4 RETURNING *`,
-      [name, description, active, req.params.skillId]
+           is_active = COALESCE($3, is_active),
+           default_visible = COALESCE($5, default_visible),
+           domain_id = COALESCE($6::bigint, domain_id),
+           parameter_type = COALESCE($7::param_type, parameter_type)
+       WHERE skill_id = $4 AND deleted_at IS NULL RETURNING skill_id`,
+      [name, description, active, current.rows[0].skill_id, defaultVisible, domain?.domain_id ?? null, parameterType]
     );
-
-    if (!rows.length) {
-      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Skill not found" } });
-    }
-
-    const s = rows[0];
-    res.json({
-      id: s.skill_code,
-      name: s.skill_name,
-      domain: s.domain_category,
-      description: s.description,
-      parameterType: s.parameter_type,
-      active: s.is_active,
-    });
+    const { rows } = await pool.query(`SELECT st.*, d.name AS domain_name FROM skill_taxonomy st
+      JOIN evaluation_domains d ON d.domain_id = st.domain_id WHERE st.skill_id = $1`, [updated.rows[0].skill_id]);
+    res.json(skillDto(rows[0]));
   } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: { code: "DUPLICATE_SUBJECT", message: "A subject with this name or identifier already exists." } });
     next(err);
   }
 });
@@ -359,6 +498,8 @@ router.get("/audit-logs", requireAuth, requireRole(["admin"]), async (req, res, 
   }
 });
 
+
+//This endpoint doesn't required
 router.get("/import-student-reviews", requireAuth, requireRole(["admin"]), async (_req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -390,7 +531,6 @@ router.get("/import-student-reviews", requireAuth, requireRole(["admin"]), async
     next(err);
   }
 });
-
 router.post("/import-student-reviews/:reviewId/approve", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
     const { name, email, branch = "CSE", section = "A" } = req.body;
@@ -535,7 +675,6 @@ router.post("/import-student-reviews/:reviewId/approve", requireAuth, requireRol
     next(err);
   }
 });
-
 router.delete("/import-student-reviews/:reviewId", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
     const reason = String(req.body?.reason || "Rejected by administrator").trim();

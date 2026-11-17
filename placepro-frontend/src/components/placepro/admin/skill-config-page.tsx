@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Pencil, Plus, RotateCcw, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
-import { SKILL_DOMAINS } from "@/types";
 import type { ParameterType, Skill } from "@/types";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { SearchInput, FilterSelect } from "@/components/placepro/shared/controls";
@@ -46,23 +45,30 @@ import { useToast } from "@/hooks/use-toast";
 /* ------------------------------------------------------------------ */
 
 interface SkillForm {
+  code: string;
   name: string;
-  domain: string;
+  domainId: string;
   description: string;
   parameterType: ParameterType;
   active: boolean;
+  defaultVisible: boolean;
 }
 
 const EMPTY_FORM: SkillForm = {
+  code: "",
   name: "",
-  domain: SKILL_DOMAINS[0],
+  domainId: "",
   description: "",
   parameterType: "numeric",
   active: true,
+  defaultVisible: false,
 };
 
 export default function SkillConfigPage() {
   const skills = useAppStore((s) => s.skills);
+  const domains = useAppStore((s) => s.domains);
+  const navigate = useAppStore((s) => s.navigate);
+  const route = useAppStore((s) => s.route);
   const addSkill = useAppStore((s) => s.addSkill);
   const updateSkill = useAppStore((s) => s.updateSkill);
   const deleteSkill = useAppStore((s) => s.deleteSkill);
@@ -70,9 +76,10 @@ export default function SkillConfigPage() {
 
   /* filters */
   const [search, setSearch] = useState("");
-  const [domainFilter, setDomainFilter] = useState("all");
+  const [domainFilter, setDomainFilter] = useState(() => route.params?.domainId ?? "all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [loading, setLoading] = useState(true);
+  const loading = useAppStore(s => s.isRefreshing);
+  const dataError = useAppStore(s => s.dataError);
 
   /* dialogs */
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -81,26 +88,21 @@ export default function SkillConfigPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Skill | null>(null);
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 550);
-    return () => clearTimeout(t);
-  }, []);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return skills.filter((s) => {
       if (q && !s.name.toLowerCase().includes(q) && !s.description.toLowerCase().includes(q)) return false;
-      if (domainFilter !== "all" && s.domain !== domainFilter) return false;
+      if (domainFilter !== "all" && s.domainId !== domainFilter && domains.find((domain) => domain.id === domainFilter)?.name !== s.domain) return false;
       if (statusFilter !== "all" && (s.active ? "active" : "inactive") !== statusFilter) return false;
       return true;
     });
-  }, [skills, search, domainFilter, statusFilter]);
+  }, [skills, domains, search, domainFilter, statusFilter]);
 
   const hasFilters = search !== "" || domainFilter !== "all" || statusFilter !== "all";
 
   function openAdd() {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, domainId: domains.find((domain) => domain.active)?.id ?? "" });
     setError(null);
     setDialogOpen(true);
   }
@@ -108,66 +110,60 @@ export default function SkillConfigPage() {
   function openEdit(s: Skill) {
     setEditing(s);
     setForm({
+      code: s.id,
       name: s.name,
-      domain: s.domain,
+      domainId: s.domainId ?? domains.find((domain) => domain.name === s.domain)?.id ?? "",
       description: s.description,
       parameterType: s.parameterType,
       active: s.active,
+      defaultVisible: s.defaultVisible ?? false,
     });
     setError(null);
     setDialogOpen(true);
   }
 
-  function saveSkill() {
-    if (!form.name.trim()) {
-      setError("Skill name is required.");
-      return;
-    }
-    if (editing) {
-      updateSkill(editing.id, {
-        name: form.name.trim(),
-        domain: form.domain,
-        description: form.description.trim(),
-        parameterType: form.parameterType,
-        active: form.active,
-      });
-      toast({ title: "Parameter updated", description: `"${form.name.trim()}" was saved. New imports pick up the change automatically.` });
-    } else {
-      addSkill({
-        id: crypto.randomUUID(),
-        name: form.name.trim(),
-        domain: form.domain,
-        description: form.description.trim(),
-        parameterType: form.parameterType,
-        active: form.active,
-      });
-      toast({ title: "Parameter added", description: `"${form.name.trim()}" now appears in imports and profiles automatically.` });
-    }
-    setDialogOpen(false);
+  const [saving, setSaving] = useState(false);
+  async function saveSkill() {
+    if (!form.name.trim()) { setError("Subject name is required."); return; }
+    const selectedDomain = domains.find((domain) => domain.id === form.domainId);
+    if (!selectedDomain || (!editing && !selectedDomain.active)) { setError("Select an active domain."); return; }
+    setSaving(true); setError(null);
+    try {
+      const payload = { ...form, domain: selectedDomain.name, code: editing ? undefined : form.code.trim() || undefined, name: form.name.trim(), description: form.description.trim() };
+      if (editing) await updateSkill(editing.id, payload);
+      else await addSkill(payload);
+      toast({ title: editing ? "Subject updated" : "Subject added" });
+      setDialogOpen(false);
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to save subject."); }
+    finally { setSaving(false); }
   }
-
-  function confirmDelete() {
+  async function confirmDelete() {
     if (!deleting) return;
-    deleteSkill(deleting.id);
-    toast({
-      title: "Parameter deleted",
-      description: `"${deleting.name}" was removed. Historical assessment records are preserved.`,
-    });
-    setDeleting(null);
+    try {
+      await deleteSkill(deleting.id);
+      toast({ title: "Parameter deleted" });
+      setDeleting(null);
+    } catch (err) { toast({ title: "Delete failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" }); }
   }
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Skills & Parameters"
+        title="Subjects, Skills & Parameters"
         subtitle="Evaluation parameters are configurable — new skills appear in imports and profiles automatically. Historical records remain intact."
         actions={
-          <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" onClick={openAdd}>
-            <Plus className="size-4" /> Add parameter
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="h-9" onClick={() => navigate("domains")}>
+              Manage domains
+            </Button>
+            <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" onClick={openAdd} disabled={!domains.some((domain) => domain.active)}>
+              <Plus className="size-4" /> Add parameter
+            </Button>
+          </div>
         }
       />
 
+      {dataError && <p role="alert" className="text-sm text-danger">{dataError}</p>}
       {/* filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <SearchInput
@@ -181,7 +177,7 @@ export default function SkillConfigPage() {
             value={domainFilter}
             onChange={setDomainFilter}
             ariaLabel="Filter by domain"
-            options={SKILL_DOMAINS.map((d) => ({ label: d, value: d }))}
+            options={domains.map((domain) => ({ label: domain.name, value: domain.id }))}
             className="w-full sm:w-52"
           />
           <FilterSelect
@@ -253,6 +249,7 @@ export default function SkillConfigPage() {
                   <th className="py-2.5 pl-5 pr-2 font-medium">Parameter</th>
                   <th className="px-2 py-2.5 font-medium">Domain</th>
                   <th className="px-2 py-2.5 font-medium">Type</th>
+                  <th className="px-2 py-2.5 font-medium">Default visible</th>
                   <th className="px-2 py-2.5 font-medium">Status</th>
                   <th className="py-2.5 pl-2 pr-5 text-right font-medium">Actions</th>
                 </tr>
@@ -274,15 +271,13 @@ export default function SkillConfigPage() {
                     <td className="px-2 py-3 text-[13px] text-muted-foreground">
                       {s.parameterType === "numeric" ? "Numeric" : "Text"}
                     </td>
+                    <td className="px-2 py-3">{s.defaultVisible ? "Yes" : "No"}</td>
                     <td className="px-2 py-3">
                       <Switch
                         checked={s.active}
-                        onCheckedChange={(c) => {
-                          updateSkill(s.id, { active: c });
-                          toast({
-                            title: c ? "Parameter activated" : "Parameter deactivated",
-                            description: `"${s.name}" is now ${c ? "included in new imports and profiles" : "hidden from new imports"}.`,
-                          });
+                        onCheckedChange={async (c) => {
+                          try { await updateSkill(s.id, { active: c }); }
+                          catch (err) { toast({ title: "Update failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" }); }
                         }}
                         aria-label={`Toggle ${s.name}`}
                       />
@@ -332,21 +327,27 @@ export default function SkillConfigPage() {
               />
               {error ? <p className="text-xs text-danger">{error}</p> : null}
             </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="skill-code">Subject code</Label>
+              <Input id="skill-code" value={form.code} disabled={!!editing} maxLength={40} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="Generated from name if empty" />
+              <p className="text-xs text-muted-foreground">Lowercase letters, numbers and underscores. Codes stay fixed after creation to preserve score references.</p>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label>Domain</Label>
-                <Select value={form.domain} onValueChange={(v) => setForm((f) => ({ ...f, domain: v }))}>
+                <Select value={form.domainId} onValueChange={(v) => setForm((f) => ({ ...f, domainId: v }))}>
                   <SelectTrigger className="w-full">
-                    <SelectValue />
+                    <SelectValue placeholder="Select a domain" />
                   </SelectTrigger>
                   <SelectContent>
-                    {SKILL_DOMAINS.map((d) => (
-                      <SelectItem key={d} value={d}>
-                        {d}
+                    {domains.filter((domain) => domain.active || domain.id === form.domainId).map((domain) => (
+                      <SelectItem key={domain.id} value={domain.id}>
+                        {domain.name}{domain.active ? "" : " (inactive)"}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {!domains.some((domain) => domain.active) && <p className="text-xs text-muted-foreground">Activate a domain before adding parameters.</p>}
               </div>
               <div className="grid gap-1.5">
                 <Label>Parameter type</Label>
@@ -375,6 +376,10 @@ export default function SkillConfigPage() {
               />
             </div>
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+              <Label htmlFor="skill-default-visible">Default visible in Students</Label>
+              <Switch id="skill-default-visible" checked={form.defaultVisible} onCheckedChange={value => setForm(f => ({ ...f, defaultVisible: value }))} />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
               <div>
                 <Label htmlFor="skill-active" className="text-[13px]">Active</Label>
                 <p className="text-xs text-muted-foreground">Inactive parameters are hidden from new imports.</p>
@@ -390,7 +395,7 @@ export default function SkillConfigPage() {
             <Button variant="outline" size="sm" className="h-9" onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
-            <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" onClick={saveSkill}>
+            <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" disabled={saving} onClick={saveSkill}>
               {editing ? "Save changes" : "Add parameter"}
             </Button>
           </DialogFooter>

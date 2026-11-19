@@ -80,7 +80,8 @@ async function matchingStudents(db, batchIds) {
   return rows.map(s => {
     const project = projectScores.get(String(s.student_id));
     return { id: String(s.student_id), name: s.full_name, rollNumber: s.roll_no, email: s.email,
-      batchId: String(s.academic_batch_id), batch: s.batch_name, section: s.section || "A",
+      batchId: String(s.academic_batch_id), batch: s.batch_name, section: s.section ?? "",
+      mobileNumber: s.custom_profile_fields?.mobileNumber ?? s.custom_profile_fields?.mobile_number ?? "",
       cgpa: Number(s.cgpa), scores: scores.get(String(s.student_id)) || {},
       average: Number(s.average_score), prStatus: s.readiness_status, trend: [],
       projectScore: project ? Number(project.project_score) : null, approvedProjectCount: project?.approved_count || 0 };

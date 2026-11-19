@@ -231,8 +231,10 @@ export const api = {
   createCompany: (payload: Omit<Company, "id"> | Company) => request<Company>("/companies", json("POST", payload)),
   updateCompany: (id: string, payload: Partial<Company>) => request<Company>(`/companies/${id}`, json("PATCH", payload)),
   deleteCompany: (id: string) => request<void>(`/companies/${id}`, { method: "DELETE" }),
+  exportCompanyShortlist: (id: string, payload: unknown) =>
+    request<{ csv: string; fileName: string; rowCount: number }>(`/companies/${id}/shortlist-export`, json("POST", payload)),
   companyMatches: (id: string, payload: unknown) =>
-    request<{ items: MatchResult[]; page: number; pageSize: number; total: number; company: Company; requiresBatchConfiguration: boolean }>(`/companies/${id}/matches`, json("POST", payload)),
+    request<{ items: MatchResult[]; page: number; pageSize: number; total: number; company: Company; requiresBatchConfiguration: boolean; matchingVersion: string }>(`/companies/${id}/matches`, json("POST", payload)),
   users: async (params: { q?: string; role?: Role; status?: "active" | "inactive"; page?: number; pageSize?: number } = {}) =>
     pageItems(await request<Paginated<AppUser>>("/users" + qs({ pageSize: 100, ...params }))),
   createUser: (payload: Partial<AppUser>) => request<AppUser>("/users", json("POST", payload)),

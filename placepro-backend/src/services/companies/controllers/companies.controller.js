@@ -3,6 +3,9 @@ const { pool, withTransaction, writeAuditLog } = require("../../../config/db");
 const { matchingStudents, validateCriteria, validateBatchIds, companySelect, companyResponse } = require("../company-eligibility");
 const { requireAuth, requireRole } = require("../../../middleware/auth.middleware");
 
+const { evaluateMatches } = require("../company-matching");
+const { matchVersion, exportShortlist } = require("../shortlist-export");
+
 const router = Router();
 
 router.get("/companies", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
@@ -113,37 +116,8 @@ router.post("/companies/:companyId/matches", requireAuth, requireRole(["admin", 
     const profile = companyResponse(comp);
     const allStudents = await matchingStudents(pool, profile.eligibleBatchIds);
 
-    const totalWeight = criteria.reduce(
-      (acc, c) => acc + Number(c.weightage || 0), 
-      0
-    ) || 1;
-
-    let evaluated = allStudents.map((stu) => {
-      const failedRequirements = [];
-      if (stu.cgpa < minCgpa) {
-        failedRequirements.push(`CGPA ${stu.cgpa} is below minimum ${minCgpa}`);
-      }
-      let weightedSum = 0;
-      for (const c of criteria) {
-        const isProjectScore = c.type === "PROJECT_SCORE" || c.skillId === "PROJECT_SCORE";
-        const score = isProjectScore ? (stu.projectScore ?? 0) : (stu.scores[c.skillId] ?? 0);
-        weightedSum += score * Number(c.weightage);
-        if (c.mandatory && score < c.minCutoff) {
-          if (isProjectScore && stu.projectScore === null) {
-            failedRequirements.push(`PROJECT SCORE is not available (required ${c.minCutoff}%)`);
-          } else {
-            const label = isProjectScore ? "PROJECT SCORE" : c.skillId.toUpperCase();
-            failedRequirements.push(`${label} score ${score}% < ${c.minCutoff}%`);
-          }
-        }
-      }
-      return {
-        student: stu,
-        eligible: failedRequirements.length === 0,
-        compatibility: Number((weightedSum / totalWeight).toFixed(1)),
-        failedRequirements,
-      };
-    });
+    let evaluated = evaluateMatches(allStudents, minCgpa, criteria);
+    const matchingVersion = matchVersion(profile, minCgpa, criteria, evaluated);
 
     if (filters.prStatus) {
       evaluated = evaluated.filter((e) => e.student.prStatus === filters.prStatus);
@@ -169,12 +143,23 @@ router.post("/companies/:companyId/matches", requireAuth, requireRole(["admin", 
       page,
       pageSize,
       total: evaluated.length,
+      matchingVersion,
       company: profile,
       requiresBatchConfiguration: profile.eligibleBatchIds.length === 0,
     });
   } catch (err) {
     next(err);
   }
+});
+
+router.post("/companies/:companyId/shortlist-export", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
+  try {
+    const result = await withTransaction(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+      return exportShortlist(client, req.params.companyId, req.body);
+    });
+    res.set("Cache-Control", "no-store").json(result);
+  } catch (error) { next(error); }
 });
 
 module.exports = router;

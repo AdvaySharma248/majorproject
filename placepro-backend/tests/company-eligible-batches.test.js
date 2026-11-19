@@ -150,6 +150,65 @@ test('company eligibility uses persisted, admin-controlled batch IDs', async t =
       assert.equal((await client.query(`SELECT * FROM academic_batches`)).rowCount, 4);
       assert.equal((await client.query(`SELECT * FROM students`)).rowCount, 5);
     });
+    await t.test('CSV exports exactly ten cross-page selections with dynamic scores, ranks and contact fields', async () => {
+      await client.query(`INSERT INTO students (student_id,roll_no,full_name,email,academic_batch_id,section,cgpa)
+        SELECT n, lpad(n::text,5,'0'), 'Export student ' || n, 'export' || n || '@test.invalid',
+          CASE WHEN n % 2 = 0 THEN 2 ELSE 3 END, CASE WHEN n=20 THEN NULL ELSE 'B' END, 8
+        FROM generate_series(10,21) n`);
+      await client.query(`UPDATE students SET full_name=$1, custom_profile_fields=$2 WHERE student_id=20`,
+        ['Student, "Quoted"\nName', JSON.stringify({ mobileNumber: '09876543210' })]);
+      await client.query(`INSERT INTO evaluation_records (record_id,batch_id,student_id) SELECT student_id,1,student_id FROM students WHERE student_id>=10`);
+      await client.query(`INSERT INTO skill_ratings (student_id,skill_id,score_percentage,source_type,source_id)
+        SELECT student_id,1,60+student_id,'EXAM',student_id FROM students WHERE student_id>=10`);
+      const company = (await request('/companies', 1, 'POST', { ...profile, name: 'CSV Company', eligibleBatchIds: ['2','3'] })).body;
+      const route = `/companies/${company.id}`;
+      const pages = await Promise.all([1,2,3,4].map(page => request(`${route}/matches`, 2, 'POST', { page, pageSize: 4 })));
+      const all = pages.flatMap(page => page.body.items).filter(r => r.eligible);
+      const selected = all.slice(0,10);
+      const payload = { selectedStudentIds: [...selected].reverse().map(r => r.student.id), matchingVersion: pages[0].body.matchingVersion };
+      payload.selectedStudentIds.push(selected[0].student.id);
+      const result = await request(`${route}/shortlist-export`, 2, 'POST', payload);
+      assert.equal(result.status, 200, JSON.stringify(result.body)); assert.equal(result.body.rowCount, 10);
+      assert(result.body.csv.startsWith('\uFEFF')); assert.match(result.body.fileName, /^CSV_Company_Engineer_Shortlist_\d{4}-\d{2}-\d{2}\.csv$/);
+      const XLSX = require('xlsx');
+      const parse = csv => { const book = XLSX.read(Buffer.from(csv, 'utf8'), { type: 'buffer', raw: true }); return XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { header: 1, defval: '' }); };
+      const data = parse(result.body.csv);
+      assert.deepEqual(data[0], ['Rank','Roll Number','Name','Mobile Number','Email','Section','Batch','CGPA','DSA','Compatibility %']);
+      assert.equal(data.length, 11);
+      for (let i=0; i<selected.length; i++) {
+        const row = data[i+1], shown = selected[i];
+        assert.equal(Number(row[0]), i+1); assert.equal(row[2], shown.student.name);
+        assert.equal(row[4], shown.student.email); assert.equal(row[6], shown.student.batch);
+        assert.equal(Number(row[8]), shown.student.scores.dsa); assert.equal(Number(row[9]), shown.compatibility);
+      }
+      const special = data.find(row => row[2] === 'Student, "Quoted"\nName');
+      assert.equal(special[1], '="00020"'); assert.equal(special[3], '="09876543210"'); assert.equal(special[5], '');
+      assert(data.slice(1).some(row => row[3] === ''));
+      assert.equal(new Set(data.slice(1).map(row => row[6])).size, 2);
+      for (const selectedStudentIds of [['1'], ['3'], ['99999']]) {
+        assert.equal((await request(`${route}/shortlist-export`, 2, 'POST', { ...payload, selectedStudentIds })).status, 422);
+      }
+      assert.equal((await request(`${route}/shortlist-export`, 2, 'POST', { ...payload, selectedStudentIds: [] })).status, 400);
+      assert.equal((await request(`${route}/shortlist-export`, 3, 'POST', payload)).status, 403);
+      assert.equal((await request(`${route}/shortlist-export`, 0, 'POST', payload)).status, 401);
+      assert.equal((await request(`${route}/shortlist-export`, 2, 'POST', { ...payload, criteriaOverride: { criteria: [] } })).status, 409);
+      assert.equal((await request(`${route}/shortlist-export`, 2, 'POST', { ...payload, matchingVersion: 'stale' })).status, 409);
+      await client.query(`UPDATE skill_ratings SET score_percentage=99 WHERE student_id=21`);
+      assert.equal((await request(`${route}/shortlist-export`, 2, 'POST', payload)).status, 409);
+
+      const projectCompany = (await request('/companies', 1, 'POST', { ...profile, eligibleBatchIds: ['2'],
+        criteria: [{ skillId: 'PROJECT_SCORE', type: 'PROJECT_SCORE', minCutoff: 0, weightage: 1, mandatory: false }] })).body;
+      const override = { minCgpa: 7.5, criteria: [{ skillId: 'PROJECT_SCORE', type: 'PROJECT_SCORE', minCutoff: 10, weightage: 0.5, mandatory: false }] };
+      const projectMatches = (await request(`/companies/${projectCompany.id}/matches`, 2, 'POST', { criteriaOverride: override })).body;
+      const exported = await request(`/companies/${projectCompany.id}/shortlist-export`, 2, 'POST', {
+        selectedStudentIds: ['2','20'], criteriaOverride: override, matchingVersion: projectMatches.matchingVersion,
+      });
+      assert.equal(exported.status, 200, JSON.stringify(exported.body));
+      const projectCsv = parse(exported.body.csv);
+      assert.equal(projectCsv[0][8], 'Verified project score'); assert(!projectCsv[0].includes('DSA'));
+      assert.equal(Number(projectCsv[1][8]), 80); assert.equal(Number(projectCsv[1][9]), 80);
+      assert.equal(projectCsv[2][8], ''); assert.equal(Number(projectCsv[2][9]), 0);
+    });
   } finally {
     t.after(async () => {
     if (server) await new Promise(resolve => server.close(resolve));

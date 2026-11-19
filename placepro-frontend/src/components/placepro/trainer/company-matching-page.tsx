@@ -93,18 +93,6 @@ function criterionScore(student: Student, skillId: string) {
   return skillId === "PROJECT_SCORE" ? student.projectScore ?? 0 : student.scores[skillId] ?? 0;
 }
 
-const csvEscape = (v: string | number) => {
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
-const slugify = (s: string) =>
-  s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-
 export default function CompanyMatchingPage() {
   const { toast } = useToast();
   const companies = useAppStore((s) => s.companies);
@@ -121,6 +109,8 @@ export default function CompanyMatchingPage() {
   );
 
   const requestSequence = useRef(0);
+  const [exporting, setExporting] = useState(false);
+  const [matchingVersion, setMatchingVersion] = useState<string | null>(null);
   const [matchedCompany, setMatchedCompany] = useState<Company | null>(null);
   const [results, setResults] = useState<MatchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -141,6 +131,7 @@ export default function CompanyMatchingPage() {
     setResults([]);
     setSelected(new Set());
     setMatchedCompany(null);
+    setMatchingVersion(null);
     try {
       const saved = await api.company(cid);
       if (requestId !== requestSequence.current) return false;
@@ -151,13 +142,14 @@ export default function CompanyMatchingPage() {
       for (let nextPage = 2; items.length < res.total; nextPage++) {
         if (requestId !== requestSequence.current) return false;
         const next = await api.companyMatches(cid, { criteriaOverride: state, page: nextPage, pageSize: res.pageSize });
-        if (JSON.stringify(next.company) !== JSON.stringify(res.company)) throw new Error("Company requirements changed. Please retry matching.");
+        if (next.matchingVersion !== res.matchingVersion) throw new Error("Company requirements changed. Please retry matching.");
         if (!next.items.length) break;
         items.push(...next.items);
       }
       if (requestId !== requestSequence.current) return false;
       setResults(items);
       setMatchedCompany(res.company);
+      setMatchingVersion(res.matchingVersion);
       return true;
     } catch (err) {
       if (requestId === requestSequence.current) setError(err instanceof Error ? err.message : "Failed to load matches");
@@ -178,6 +170,7 @@ export default function CompanyMatchingPage() {
     setResults([]);
     setSelected(new Set());
     setMatchedCompany(null);
+    setMatchingVersion(null);
     setLoading(true);
     setCompanyId(id);
     setPage(1);
@@ -330,49 +323,32 @@ export default function CompanyMatchingPage() {
 
   /* ------------------------------- export ------------------------------ */
 
-  const exportShortlist = () => {
-    if (!company || loading || error || matchedCompany?.id !== company.id) return;
-    const rows = eligibleResults.filter((r) => selected.has(r.student.id));
-    if (rows.length === 0) return;
-
-    const skillNames = applied.criteria.map((c) => criterionName(skills, c.skillId));
-    const header = [
-      "Rank",
-      "Roll Number",
-      "Name",
-      "Batch",
-      "CGPA",
-      ...skillNames,
-      "Compatibility %",
-    ];
-    const lines = [
-      header,
-      ...rows.map((r) => [
-        rankById.get(r.student.id) ?? "",
-        r.student.rollNumber,
-        r.student.name,
-        r.student.batch,
-        r.student.cgpa.toFixed(1),
-        ...applied.criteria.map((c) => String(criterionScore(r.student, c.skillId))),
-        r.compatibility.toFixed(1),
-      ]),
-    ];
-    const csv = lines.map((row) => row.map(csvEscape).join(",")).join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${slugify(company.name)}-${slugify(company.role)}-shortlist.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-
-    toast({
-      title: "Shortlist exported",
-      description: `${rows.length} candidates exported for ${company.name} — ${company.role}.`,
-    });
+  const exportShortlist = async () => {
+    if (!company || loading || error || exporting || !matchingVersion || matchedCompany?.id !== company.id) return;
+    if (selected.size === 0) {
+      toast({ title: "Select students first", description: "Select at least one eligible student to export a shortlist." });
+      return;
+    }
+    const requestId = requestSequence.current;
+    setExporting(true);
+    try {
+      const result = await api.exportCompanyShortlist(company.id, {
+        selectedStudentIds: [...selected], criteriaOverride: applied, matchingVersion,
+      });
+      if (requestId !== requestSequence.current) return;
+      const blob = new Blob([result.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast({ title: "Shortlist exported", description: `${result.rowCount} selected students exported for ${company.name}.` });
+    } catch (error) {
+      if (requestId === requestSequence.current) toast({ title: "Unable to export shortlist", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally { setExporting(false); }
   };
 
   /* ------------------------------- render ------------------------------ */
@@ -728,9 +704,9 @@ export default function CompanyMatchingPage() {
                 <Button
                   size="sm"
                   className="h-8 bg-primary text-[13px] hover:bg-primary-hover"
-                  onClick={exportShortlist}
+                  disabled={exporting || loading || !matchingVersion} onClick={() => void exportShortlist()}
                 >
-                  <Download className="size-3.5" /> Export shortlist
+                  <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export shortlist"}
                 </Button>
                 <Button
                   variant="ghost"

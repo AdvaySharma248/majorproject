@@ -37,6 +37,7 @@ export interface Skill {
 }
 
 export interface Student {
+  batchId?: string;
   id: string;
   rollNumber: string;
   name: string;
@@ -76,6 +77,7 @@ export interface Assessment {
   results: AssessmentResult[];
   /** true once a trainer has reviewed / approved the imported record */
   reviewed: boolean;
+  canRollback?: boolean;
   sourceId?: string;
   /** Summary fields included by the assessment listing endpoint. */
   evaluatedCount?: number;
@@ -121,6 +123,8 @@ export interface CompanyCriterion {
 }
 
 export interface Company {
+  eligibleBatchIds?: string[];
+  eligibleBatches?: { id: string; name: string }[];
   id: string;
   name: string;
   role: string;

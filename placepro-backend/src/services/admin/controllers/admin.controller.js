@@ -554,7 +554,7 @@ router.post("/import-student-reviews/:reviewId/approve", requireAuth, requireRol
       }
 
       const review = reviewRes.rows[0];
-      if (review.status !== "PENDING") {
+      if (review.status !== "PENDING" || review.import_status !== "CONFIRMED") {
         const error = new Error("This verification request has already been reviewed");
         error.statusCode = 409;
         throw error;

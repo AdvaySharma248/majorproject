@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, Building2, CheckCircle2, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, Building2, CheckCircle2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
-import type { Company, CompanyCriterion } from "@/types";
+import { api } from "@/lib/placepro/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import type { Batch, Company, CompanyCriterion } from "@/types";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { EmptyState } from "@/components/placepro/shared/states";
 import { Button } from "@/components/ui/button";
@@ -51,6 +53,7 @@ interface CriterionRow {
 }
 
 interface CompanyForm {
+  eligibleBatchIds: string[];
   name: string;
   role: string;
   industry: string;
@@ -58,7 +61,7 @@ interface CompanyForm {
   criteria: CriterionRow[];
 }
 
-const EMPTY_FORM: CompanyForm = { name: "", role: "", industry: "", minCgpa: 6, criteria: [] };
+const EMPTY_FORM: CompanyForm = { eligibleBatchIds: [], name: "", role: "", industry: "", minCgpa: 6, criteria: [] };
 
 export default function CompanyRequirementsPage() {
   const companies = useAppStore((s) => s.companies);
@@ -74,8 +77,25 @@ export default function CompanyRequirementsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
   const [form, setForm] = useState<CompanyForm>(EMPTY_FORM);
-  const [errors, setErrors] = useState<{ name?: string; role?: string }>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [deleting, setDeleting] = useState<Company | null>(null);
+
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [batchSearch, setBatchSearch] = useState("");
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!dialogOpen) return;
+    let active = true;
+    setBatchSearch("");
+    setBatchesLoading(true);
+    setBatchError(null);
+    api.batches().then(items => { if (active) setBatches(items); })
+      .catch(error => { if (active) setBatchError(error instanceof Error ? error.message : "Unable to load batches"); })
+      .finally(() => { if (active) setBatchesLoading(false); });
+    return () => { active = false; };
+  }, [dialogOpen]);
 
   const totalWeight = form.criteria.reduce((a, c) => a + (Number.isFinite(c.weightage) ? c.weightage : 0), 0);
 
@@ -86,6 +106,7 @@ export default function CompanyRequirementsPage() {
 
   function toForm(c: Company): CompanyForm {
     return {
+      eligibleBatchIds: [...(c.eligibleBatchIds ?? [])],
       name: c.name,
       role: c.role,
       industry: c.industry,
@@ -144,51 +165,45 @@ export default function CompanyRequirementsPage() {
     }));
   }
 
-  function saveCompany() {
-    const next: { name?: string; role?: string } = {};
-    if (!form.name.trim()) next.name = "Company name is required.";
-    if (!form.role.trim()) next.role = "Role is required.";
-    if (next.name || next.role) {
-      setErrors(next);
-      return;
-    }
-    const criteria: CompanyCriterion[] = form.criteria
-      .filter((r) => r.skillId)
-      .map((r) => ({
-        skillId: r.skillId,
-        ...(r.skillId === "PROJECT_SCORE" ? { type: "PROJECT_SCORE" as const } : {}),
-        minCutoff: Number.isFinite(r.minCutoff) ? r.minCutoff : 60,
-        weightage: (Number.isFinite(r.weightage) ? r.weightage : 0) / 100,
-        mandatory: r.mandatory,
-      }));
-    if (editing) {
-      updateCompany(editing.id, {
-        name: form.name.trim(),
-        role: form.role.trim(),
-        industry: form.industry.trim(),
-        minCgpa: form.minCgpa,
-        criteria,
-      });
-      toast({ title: "Company updated", description: `${form.name.trim()} — ${form.role.trim()} was saved.` });
-    } else {
-      addCompany({
-        id: crypto.randomUUID(),
-        name: form.name.trim(),
-        role: form.role.trim(),
-        industry: form.industry.trim(),
-        minCgpa: form.minCgpa,
-        criteria,
-      });
-      toast({ title: "Company added", description: `${form.name.trim()} is now available in Company Matching.` });
-    }
-    setDialogOpen(false);
+  async function saveCompany() {
+    if (saving) return;
+    const next: Record<string, string> = {};
+    if (!form.name.trim() || form.name.trim().length > 100) next.name = "Company name is required (maximum 100 characters).";
+    if (!form.role.trim() || form.role.trim().length > 100) next.role = "Role is required (maximum 100 characters).";
+    if (!form.eligibleBatchIds.length) next.batches = "Select at least one eligible batch.";
+    if (form.eligibleBatchIds.some(id => !batches.some(b => b.id === id))) next.batches = "Remove unavailable batches and select an existing batch.";
+    if (!Number.isFinite(form.minCgpa) || form.minCgpa < 0 || form.minCgpa > 10) next.criteria = "CGPA must be between 0 and 10.";
+    if (form.criteria.some(c => !c.skillId || !Number.isFinite(c.minCutoff) || c.minCutoff < 0 || c.minCutoff > 100 || !Number.isFinite(c.weightage) || c.weightage < 0 || c.weightage > 100)) next.criteria = "Each cutoff and weight must be between 0 and 100.";
+    if (new Set(form.criteria.map(c => c.skillId)).size !== form.criteria.length) next.criteria = "Select each skill or project-score criterion only once.";
+    setErrors(next);
+    if (Object.keys(next).length || batchesLoading || batchError) return;
+    const criteria: CompanyCriterion[] = form.criteria.map(r => ({
+      skillId: r.skillId, ...(r.skillId === "PROJECT_SCORE" ? { type: "PROJECT_SCORE" as const } : {}),
+      minCutoff: r.minCutoff, weightage: r.weightage / 100, mandatory: r.mandatory,
+    }));
+    const payload = { name: form.name.trim(), role: form.role.trim(), industry: form.industry.trim(),
+      minCgpa: form.minCgpa, criteria, eligibleBatchIds: form.eligibleBatchIds };
+    setSaving(true);
+    try {
+      if (editing) await updateCompany(editing.id, payload);
+      else await addCompany(payload);
+      toast({ title: editing ? "Company updated" : "Company added", description: "Requirements and eligible batches saved." });
+      setDialogOpen(false);
+    } catch (error) {
+      setErrors({ save: error instanceof Error ? error.message : "Unable to save company. Please try again." });
+    } finally { setSaving(false); }
   }
 
-  function confirmDelete() {
-    if (!deleting) return;
-    deleteCompany(deleting.id);
-    toast({ title: "Company deleted", description: `${deleting.name} was removed along with its eligibility profile.` });
-    setDeleting(null);
+  async function confirmDelete() {
+    if (!deleting || saving) return;
+    setSaving(true);
+    try {
+      await deleteCompany(deleting.id);
+      toast({ title: "Company deleted", description: `${deleting.name} was removed.` });
+      setDeleting(null);
+    } catch (error) {
+      toast({ title: "Unable to delete company", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally { setSaving(false); }
   }
 
   /* criteria editor — shared by add & edit dialogs */
@@ -354,6 +369,12 @@ export default function CompanyRequirementsPage() {
                 </div>
               </div>
 
+              <div className="flex flex-wrap items-center gap-1.5 px-5 pt-3 text-xs">
+                <span className="text-muted-foreground">Eligible batches:</span>
+                {c.eligibleBatches?.length ? c.eligibleBatches.map(batch => (
+                  <span key={batch.id} className="max-w-full break-words rounded-full bg-primary-soft px-2 py-0.5 text-primary">{batch.name}</span>
+                )) : <span className="text-warning">Configuration required - edit to select batches</span>}
+              </div>
               <div className="flex-1 overflow-x-auto px-5 py-2">
                 <table className="w-full text-sm">
                   <thead>
@@ -420,7 +441,7 @@ export default function CompanyRequirementsPage() {
       </p>
 
       {/* add / edit company dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!saving) setDialogOpen(open); }}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit company" : "Add company"}</DialogTitle>
@@ -472,21 +493,43 @@ export default function CompanyRequirementsPage() {
                 />
               </div>
             </div>
+            <fieldset className="grid gap-2" disabled={saving || batchesLoading}>
+              <legend className="mb-2 text-sm font-medium">Eligible batches <span className="text-danger">*</span></legend>
+              <Input aria-label="Search eligible batches" placeholder="Search batches..." value={batchSearch} onChange={e => setBatchSearch(e.target.value)} />
+              <div className="flex flex-wrap gap-1.5">
+                {form.eligibleBatchIds.map(id => (
+                  <Button key={id} variant="outline" size="sm" className="h-auto max-w-full whitespace-normal text-left text-xs" aria-label={`Remove ${batches.find(b => b.id === id)?.name ?? 'unavailable batch'}`} onClick={() => setForm(f => ({ ...f, eligibleBatchIds: f.eligibleBatchIds.filter(value => value !== id) }))}>
+                    {batches.find(b => b.id === id)?.name ?? "Unavailable batch"} <X className="size-3 shrink-0" aria-hidden />
+                  </Button>
+                ))}
+              </div>
+              <div className="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+                {batchesLoading ? <p className="text-sm text-muted-foreground">Loading batches...</p> : batchError ? <p role="alert" className="text-sm text-danger">{batchError} Close and reopen this form to retry.</p> : !batches.length ? <p className="text-sm text-muted-foreground">No batches yet. Create an academic batch in Batch Management first.</p> : !batches.some(b => b.name.toLowerCase().includes(batchSearch.toLowerCase())) ? <p className="text-sm text-muted-foreground">No batches match your search.</p> : batches.filter(b => b.name.toLowerCase().includes(batchSearch.toLowerCase())).map(batch => (
+                  <label key={batch.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={form.eligibleBatchIds.includes(batch.id)} onCheckedChange={checked => setForm(f => ({ ...f, eligibleBatchIds: checked === true ? [...new Set([...f.eligibleBatchIds, batch.id])] : f.eligibleBatchIds.filter(id => id !== batch.id) }))} />
+                    <span className="break-words">{batch.name}{batch.status === "archived" ? " (archived)" : ""}</span>
+                  </label>
+                ))}
+              </div>
+              {errors.batches && <p role="alert" className="text-xs text-danger">{errors.batches}</p>}
+            </fieldset>
             {criteriaEditor}
+            {errors.criteria && <p role="alert" className="text-xs text-danger">{errors.criteria}</p>}
+            {errors.save && <p role="alert" className="text-sm text-danger">{errors.save}</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" size="sm" className="h-9" onClick={() => setDialogOpen(false)}>
+            <Button variant="outline" size="sm" className="h-9" disabled={saving} onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
-            <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" onClick={saveCompany}>
-              {editing ? "Save changes" : "Add company"}
+            <Button size="sm" className="h-9 bg-primary hover:bg-primary-hover" disabled={saving || batchesLoading || !!batchError} onClick={() => void saveCompany()}>
+              {saving ? "Saving..." : editing ? "Save changes" : "Add company"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* delete confirm */}
-      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
+      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && !saving && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this company?</AlertDialogTitle>
@@ -497,7 +540,7 @@ export default function CompanyRequirementsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-danger hover:bg-danger" onClick={confirmDelete}>
+            <AlertDialogAction className="bg-danger hover:bg-danger" disabled={saving} onClick={(event) => { event.preventDefault(); void confirmDelete(); }}>
               Delete company
             </AlertDialogAction>
           </AlertDialogFooter>

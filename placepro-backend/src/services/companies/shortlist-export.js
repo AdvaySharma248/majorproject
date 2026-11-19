@@ -56,10 +56,10 @@ async function exportShortlist(db, companyId, body) {
   // Saved company order determines headers; applied cutoffs/weights determine the shared matching result.
   const columns = profile.criteria;
   const headers = ['Rank', 'Roll Number', 'Name', 'Mobile Number', 'Email', 'Section', 'Batch', 'CGPA',
-    ...columns.map(c => isProject(c) ? 'Verified project score' : skillFor(c).skill_name), 'Compatibility %'];
+    ...columns.flatMap(c => isProject(c) ? ['Verified project score', 'Project GitHub Links'] : [skillFor(c).skill_name]), 'Compatibility %'];
   const dataRows = chosen.map(({ student: s, rank, compatibility }) => [rank, s.rollNumber, s.name,
     s.mobileNumber, s.email, s.section, s.batch, s.cgpa,
-    ...columns.map(c => isProject(c) ? s.projectScore : s.scores[c.skillId]), compatibility]);
+    ...columns.flatMap(c => isProject(c) ? [s.projectScore, s.projectGithubLinks.join('\n')] : [s.scores[c.skillId]]), compatibility]);
   const csv = '\uFEFF' + [headers.map(value => csvCell(value)).join(','),
     ...dataRows.map(row => row.map((value, index) => csvCell(value, index === 1 || index === 3)).join(','))].join('\r\n') + '\r\n';
   const safeName = value => String(value).normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_|_$/g, '').slice(0, 80) || 'Company';

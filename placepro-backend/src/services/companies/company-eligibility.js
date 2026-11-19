@@ -63,7 +63,9 @@ async function matchingStudents(db, batchIds) {
     WHERE sr.student_id = ANY($1::bigint[]) AND st.deleted_at IS NULL
     GROUP BY sr.student_id, st.skill_id, st.skill_code`, [ids]);
   const projects = await db.query(`SELECT p.student_id, ROUND(AVG(score.final_score), 2) AS project_score,
-    COUNT(*)::int AS approved_count FROM projects p
+    COUNT(*)::int AS approved_count,
+    ARRAY_AGG(DISTINCT p.repository_url ORDER BY p.repository_url) FILTER (WHERE p.repository_url IS NOT NULL) AS repository_urls
+    FROM projects p
     JOIN LATERAL (SELECT final_score FROM project_score_snapshots WHERE project_id=p.project_id AND final_score IS NOT NULL
       ORDER BY computed_at DESC, project_score_snapshot_id DESC LIMIT 1) score ON TRUE
     JOIN LATERAL (SELECT review_status FROM project_reviews WHERE project_id=p.project_id
@@ -84,7 +86,14 @@ async function matchingStudents(db, batchIds) {
       mobileNumber: s.custom_profile_fields?.mobileNumber ?? s.custom_profile_fields?.mobile_number ?? "",
       cgpa: Number(s.cgpa), scores: scores.get(String(s.student_id)) || {},
       average: Number(s.average_score), prStatus: s.readiness_status, trend: [],
-      projectScore: project ? Number(project.project_score) : null, approvedProjectCount: project?.approved_count || 0 };
+      projectScore: project ? Number(project.project_score) : null, approvedProjectCount: project?.approved_count || 0,
+      projectGithubLinks: (project?.repository_urls || []).filter(value => {
+        try {
+          const url = new URL(value);
+          return ['https:', 'http:'].includes(url.protocol) && url.hostname === 'github.com' &&
+            !url.username && !url.password && url.pathname.split('/').filter(Boolean).length >= 2;
+        } catch { return false; }
+      }) };
   });
 }
 

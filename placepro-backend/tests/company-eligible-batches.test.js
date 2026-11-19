@@ -198,6 +198,14 @@ test('company eligibility uses persisted, admin-controlled batch IDs', async t =
 
       const projectCompany = (await request('/companies', 1, 'POST', { ...profile, eligibleBatchIds: ['2'],
         criteria: [{ skillId: 'PROJECT_SCORE', type: 'PROJECT_SCORE', minCutoff: 0, weightage: 1, mandatory: false }] })).body;
+      await client.query(`UPDATE projects SET repository_url='https://github.com/student/alpha' WHERE project_id=1`);
+      await client.query(`INSERT INTO projects (project_id,student_id,project_name,ownership_status,repository_url) VALUES
+        (2,2,'Second approved project','VERIFIED','https://github.com/student/beta'),
+        (3,2,'Unverified project','PENDING','https://github.com/student/unverified'),
+        (4,2,'Unapproved project','VERIFIED','https://github.com/student/unapproved'),
+        (5,2,'Other host','VERIFIED','https://example.com/student/repo')`);
+      await client.query(`INSERT INTO project_reviews (project_id,reviewer_id,review_status) VALUES (2,2,'APPROVED'),(3,2,'APPROVED'),(4,2,'DRAFT'),(5,2,'APPROVED')`);
+      await client.query(`INSERT INTO project_score_snapshots (project_id,final_score,formula_version) VALUES (2,80,'test'),(3,80,'test'),(4,80,'test'),(5,80,'test')`);
       const override = { minCgpa: 7.5, criteria: [{ skillId: 'PROJECT_SCORE', type: 'PROJECT_SCORE', minCutoff: 10, weightage: 0.5, mandatory: false }] };
       const projectMatches = (await request(`/companies/${projectCompany.id}/matches`, 2, 'POST', { criteriaOverride: override })).body;
       const exported = await request(`/companies/${projectCompany.id}/shortlist-export`, 2, 'POST', {
@@ -206,8 +214,10 @@ test('company eligibility uses persisted, admin-controlled batch IDs', async t =
       assert.equal(exported.status, 200, JSON.stringify(exported.body));
       const projectCsv = parse(exported.body.csv);
       assert.equal(projectCsv[0][8], 'Verified project score'); assert(!projectCsv[0].includes('DSA'));
-      assert.equal(Number(projectCsv[1][8]), 80); assert.equal(Number(projectCsv[1][9]), 80);
-      assert.equal(projectCsv[2][8], ''); assert.equal(Number(projectCsv[2][9]), 0);
+      assert.equal(projectCsv[0][9], 'Project GitHub Links'); assert.equal(projectCsv[0][10], 'Compatibility %');
+      assert.equal(Number(projectCsv[1][8]), 80); assert.equal(Number(projectCsv[1][10]), 80);
+      assert.equal(projectCsv[1][9], 'https://github.com/student/alpha\nhttps://github.com/student/beta');
+      assert.equal(projectCsv[2][8], ''); assert.equal(projectCsv[2][9], ''); assert.equal(Number(projectCsv[2][10]), 0);
     });
   } finally {
     t.after(async () => {

@@ -152,8 +152,17 @@ export interface Batch {
   academicYears: string;
   sections: string[];
   trainerIds: string[];
+  trainers: BatchTrainer[];
   studentCount: number;
   status: "active" | "archived";
+  archivedAt?: string | null;
+  archivedBy?: { id: string; name: string } | null;
+}
+
+export interface BatchTrainer {
+  id: string;
+  name: string;
+  status: "active" | "inactive";
 }
 
 export interface AuditLog {

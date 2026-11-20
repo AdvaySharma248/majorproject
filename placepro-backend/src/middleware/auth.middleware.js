@@ -72,7 +72,26 @@ function requireRole(roles) {
   };
 }
 
+async function requireStudentBatchAccess(req, res, next) {
+  try {
+    if (req.user?.role === "admin") return next();
+    if (req.user?.role !== "trainer") return res.status(403).json({ error: { code: "FORBIDDEN", message: "Insufficient role permissions" } });
+    const { rows } = await pool.query(
+      `SELECT 1 FROM students s JOIN academic_batches ab
+       ON ab.academic_batch_id=s.academic_batch_id OR ab.name=s.batch
+       WHERE s.student_id=$1 AND EXISTS (
+         SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(ab.trainer_ids)='array' THEN ab.trainer_ids ELSE '[]'::jsonb END) trainer_id
+         WHERE trainer_id=$2
+       ) LIMIT 1`,
+      [req.params.studentId, String(req.user.id)],
+    );
+    if (!rows.length) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Student not found" } });
+    next();
+  } catch (error) { next(error); }
+}
+
 module.exports = {
   requireAuth,
   requireRole,
+  requireStudentBatchAccess,
 };

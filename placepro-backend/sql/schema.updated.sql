@@ -454,7 +454,7 @@ WHERE s.readiness_status = 'PR'
 -- Migrate legacy enum-backed skills to stable domain IDs without changing skill IDs or ratings.
 BEGIN;
 ALTER TABLE skill_taxonomy ADD COLUMN IF NOT EXISTS domain_id BIGINT;
-DO $ BEGIN
+DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'skill_taxonomy' AND column_name = 'domain_category') THEN
     INSERT INTO evaluation_domains (name, description)
     SELECT DISTINCT domain_category::text, '' FROM skill_taxonomy st
@@ -463,13 +463,13 @@ DO $ BEGIN
     WHERE st.domain_id IS NULL AND lower(btrim(d.name)) = lower(btrim(st.domain_category::text));
   END IF;
   IF EXISTS (SELECT 1 FROM skill_taxonomy WHERE domain_id IS NULL) THEN RAISE EXCEPTION 'Dynamic domain migration could not map every skill to a domain'; END IF;
-END $;
+END $$;
 ALTER TABLE skill_taxonomy ALTER COLUMN domain_id SET NOT NULL;
-DO $ BEGIN
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'skill_taxonomy_domain_id_fkey') THEN
     ALTER TABLE skill_taxonomy ADD CONSTRAINT skill_taxonomy_domain_id_fkey FOREIGN KEY (domain_id) REFERENCES evaluation_domains(domain_id) ON DELETE RESTRICT;
   END IF;
-END $;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_skill_taxonomy_domain_id ON skill_taxonomy(domain_id);
 ALTER TABLE skill_taxonomy DROP COLUMN IF EXISTS domain_category;
 DROP TYPE IF EXISTS skill_domain;

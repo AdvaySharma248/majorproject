@@ -3,7 +3,7 @@ import { logger } from "@/lib/logger";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
 
-export type ApiErrorDetail = { field?: string; message: string };
+export type ApiErrorDetail = { field?: string; message: string; section?: string; count?: number; batchId?: string };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public details: ApiErrorDetail[] = []) {
@@ -35,13 +35,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
 const pageItems = <T>(value: { items: T[] } | T[]) => Array.isArray(value) ? value : value.items;
 
-type Paginated<T> = { items: T[]; page: number; pageSize: number; total: number };
+export type Paginated<T> = { items: T[]; page: number; pageSize: number; total: number };
+
+export type BatchStats = {
+  batchId: string;
+  studentCount: number;
+  prCount: number;
+  nprCount: number;
+  averageCgpa: number;
+  domains: { label: string; value: number }[];
+  top: Student[];
+  sectionCounts: { section: string; count: number }[];
+};
 
 export type DashboardData = {
   role: "admin" | "trainer" | "student";
   totalStudents?: number;
   prCount?: number;
   nprCount?: number;
+  averageScore?: number;
+  domainAverages?: Record<string, number>;
   topPerformers?: Student[];
   attentionList?: Student[];
   userCounts?: { role: string; status: string; count: number }[];
@@ -172,12 +185,15 @@ export const api = {
   me: () => request<{ user: SessionUser }>("/auth/me"),
   logout: () => request<void>("/auth/logout", json("POST")),
   dashboard: () => request<DashboardData>("/dashboard"),
-  // Import validation needs the full roster, not just the first page of students.
-  students: () => request<{ items: Student[] }>("/students?pageSize=1000"),
+  // Compatibility snapshot only. Complete rosters must use listStudents page-by-page.
+  students: () => request<Paginated<Student>>("/students?page=1&pageSize=100"),
   // Paged roster for a single batch (used by the import wizard).
   listStudents: (p: { batchId?: string; page?: number; pageSize?: number; q?: string; section?: string; prStatus?: string; domainId?: string; projectFilter?: string; sort?: string }) =>
     request<Paginated<Student>>(`/students${qs(p)}`),
   student: (id: string) => request<Student>(`/students/${id}`),
+  updateStudent: (id: string, payload: { name?: string; email?: string; mobileNumber?: string; section?: string; cgpa?: number }) =>
+    request<Student>(`/students/${encodeURIComponent(id)}`, json("PATCH", payload)),
+  unassignStudentSection: (id: string) => request<Student>(`/students/${encodeURIComponent(id)}/section`, { method: "DELETE" }),
   studentGithubStatistics: (id: string) => request<GithubStatisticsResponse>(`/students/${encodeURIComponent(id)}/github-statistics`),
   studentAssessments: (id: string) => request<Paginated<StudentAssessment>>(`/students/${id}/assessments`),
   studentFeedback: (id: string) => request<TrainerFeedback[]>(`/students/${id}/feedback`),
@@ -241,6 +257,8 @@ export const api = {
     request<{ csv: string; fileName: string; rowCount: number }>(`/companies/${id}/shortlist-export`, json("POST", payload)),
   companyMatches: (id: string, payload: unknown) =>
     request<{ items: MatchResult[]; page: number; pageSize: number; total: number; company: Company; requiresBatchConfiguration: boolean; matchingVersion: string }>(`/companies/${id}/matches`, json("POST", payload)),
+  listUsers: (params: { q?: string; role?: Role; status?: "active" | "inactive"; page?: number; pageSize?: number } = {}) =>
+    request<Paginated<AppUser>>("/users" + qs(params)),
   users: async (params: { q?: string; role?: Role; status?: "active" | "inactive"; page?: number; pageSize?: number } = {}) =>
     pageItems(await request<Paginated<AppUser>>("/users" + qs({ pageSize: 100, ...params }))),
   createUser: (payload: Partial<AppUser>) => request<AppUser>("/users", json("POST", payload)),
@@ -249,9 +267,13 @@ export const api = {
   // Filtered batch list (spec allows an array or a paginated body, so normalise to an array).
   listBatches: async (p: { status?: "active" | "archived" } = {}) =>
     pageItems(await request<Batch[] | { items: Batch[] }>(`/batches${qs(p)}`)),
-  createBatch: (payload: Omit<Batch, "id" | "studentCount"> | Batch) => request<Batch>("/batches", json("POST", payload)),
+  createBatch: (payload: Omit<Batch, "id" | "studentCount" | "trainers"> | Batch) => request<Batch>("/batches", json("POST", payload)),
   updateBatch: (id: string, payload: Partial<Batch>) => request<Batch>(`/batches/${id}`, json("PATCH", payload)),
-  batchStats: (id: string) => request<unknown>(`/batches/${id}/stats`),
+  batchStats: (id: string) => request<BatchStats>(`/batches/${id}/stats`),
+  archiveBatch: (id: string) => request<Batch>(`/batches/${id}/archive`, json("POST")),
+  restoreBatch: (id: string) => request<Batch>(`/batches/${id}/restore`, json("POST")),
+  resolveTrainerAssignment: (id: string, payload: { missingTrainerId: string; action: "remove" | "replace"; replacementTrainerId?: string }) =>
+    request<Batch>(`/batches/${id}/trainer-assignments/resolve`, json("POST", payload)),
   subjectColumns: () => request<{ columns: Record<string, boolean> | null }>("/me/subject-columns"),
   saveSubjectColumns: (payload: { columns?: Record<string, boolean>; reset?: boolean }) => request<{ columns: Record<string, boolean> | null }>("/me/subject-columns", json("PATCH", payload)),
   domains: () => request<EvaluationDomain[]>("/domains"),

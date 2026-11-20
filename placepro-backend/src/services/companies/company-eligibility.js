@@ -21,8 +21,8 @@ async function validateBatchIds(db, ids) {
   if (!Array.isArray(ids) || !ids.length) invalid("Select at least one eligible batch");
   if (ids.some(id => !["string", "number"].includes(typeof id) || !/^[1-9]\d*$/.test(String(id)) || BigInt(id) > 9223372036854775807n)) invalid("Invalid eligible batch ID");
   const unique = [...new Set(ids.map(String))];
-  const { rows } = await db.query(`SELECT academic_batch_id FROM academic_batches WHERE academic_batch_id = ANY($1::bigint[]) FOR KEY SHARE`, [unique]);
-  if (rows.length !== unique.length) invalid("One or more eligible batches no longer exist");
+  const { rows } = await db.query(`SELECT academic_batch_id FROM academic_batches WHERE academic_batch_id = ANY($1::bigint[]) AND status='active' FOR KEY SHARE`, [unique]);
+  if (rows.length !== unique.length) invalid("One or more eligible batches are missing or archived");
   return unique;
 }
 

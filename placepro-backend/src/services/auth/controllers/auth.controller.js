@@ -33,8 +33,8 @@ router.post("/auth/change-password", requireAuth, authRateLimit(), async (req, r
   try {
     const { currentPassword, newPassword } = req.body;
     if (typeof currentPassword !== "string" || typeof newPassword !== "string" ||
-        newPassword.length < 8 || Buffer.byteLength(newPassword, "utf8") > 72 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
-      return res.status(400).json({ error: { code: "VALIDATION", message: "New password must contain at least 8 characters, letters and numbers, and be at most 72 UTF-8 bytes" } });
+        newPassword.length < 12 || Buffer.byteLength(newPassword, "utf8") > 72 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      return res.status(400).json({ error: { code: "VALIDATION", message: "New password must contain at least 12 characters, letters and numbers, and be at most 72 UTF-8 bytes" } });
     }
     const u = await withTransaction(async client => {
       const { rows } = await client.query(`SELECT * FROM users WHERE user_id=$1 FOR UPDATE`, [req.user.id]);

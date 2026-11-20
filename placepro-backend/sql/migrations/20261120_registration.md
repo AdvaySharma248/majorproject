@@ -20,6 +20,20 @@ Run tests from `placepro-backend`:
 node --test tests/registration.test.js tests/company-eligible-batches.test.js tests/shortlist-csv.test.js tests/github-statistics.test.js
 ```
 
-Tests use temporary PostgreSQL schemas. The full schema's pre-existing malformed legacy domain-upgrade delimiters are outside this migration; tests use fresh-table definitions and apply this migration separately.
+Tests use temporary PostgreSQL schemas and run against the full schema. Run `npm test` from the backend directory for all regression tests.
 
 Login and password-change rate limiting is per auth-service process (15 attempts per IP/account in 15 minutes). Multiple auth replicas need a shared limiter before scaling. Credentials are not automatically sent by email or SMS. The admin should communicate the initial-login instructions through the institution's existing process.
+
+## Excel/CSV registration
+
+Apply the additional import-session migration with `node placepro-backend/scripts/migrate-registration-imports.js` from the repository root. It creates only import metadata; it does not register accounts or change existing credentials.
+
+Admin endpoints use `/api/v1/users/imports/students` or `/api/v1/users/imports/trainers`:
+
+- `GET /template`: downloads an Excel template through the existing base64 JSON download contract.
+- `POST /preview`: multipart `file`; student uploads also require `academicBatchId` selected in the dialog. Accepts xlsx, xls and CSV, up to 5 MB and 200 rows.
+- `POST /confirm`: `{ importId, mode }`, with `valid-only` or `strict` mode.
+
+Preview creates an owner-scoped metadata session with a 24-hour expiry, but no accounts. Confirmation revalidates current database records, locks the session, and stores the result for safe retries. Valid-only imports use a savepoint for each account; strict imports roll back the whole transaction on failure. Confirmation clears submitted rows from the session. Expired unconfirmed sessions cannot be confirmed; administrators can purge their metadata under their retention policy.
+
+The dialog offers templates, preview statuses, summary counts, error CSV download and confirmation results. Students inherit the selected batch; trainers use existing batch IDs or names separated by semicolons. Identity conflicts are rejected, and linking an existing student preserves scores and project history. Mobile numbers are redacted in downloadable error reports and persisted results because they are temporary credentials.

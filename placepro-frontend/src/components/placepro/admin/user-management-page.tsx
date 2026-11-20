@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RotateCcw, UserPlus, Users } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
 import type { AppUser, Role } from "@/types";
@@ -41,6 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/placepro/api";
 
 /* ------------------------------------------------------------------ */
 /* User Management                                                     */
@@ -75,7 +76,6 @@ const EMPTY_FORM: UserForm = { mobileNumber: "", name: "", email: "", role: "adm
 
 
 export default function UserManagementPage() {
-  const users = useAppStore((s) => s.users);
   const batches = useAppStore((s) => s.batches);
   const addUser = useAppStore((s) => s.addUser);
   const updateUser = useAppStore((s) => s.updateUser);
@@ -84,8 +84,12 @@ export default function UserManagementPage() {
   /* filters */
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
-    const [page, setPage] = useState(1);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [requestError, setRequestError] = useState("");
+  const [result, setResult] = useState<{ items: AppUser[]; total: number }>({ items: [], total: 0 });
+  const [refreshToken, setRefreshToken] = useState(0);
+  const requestId = useRef(0);
 
   /* dialogs */
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -95,23 +99,38 @@ export default function UserManagementPage() {
   const [confirmTarget, setConfirmTarget] = useState<AppUser | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 550);
-    return () => clearTimeout(t);
-  }, []);
+    const currentRequest = ++requestId.current;
+    setLoading(true);
+    setRequestError("");
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await api.listUsers({
+          q: search.trim() || undefined,
+          role: roleFilter === "all" ? undefined : roleFilter as Role,
+          page,
+          pageSize: PAGE_SIZE,
+        });
+        if (requestId.current === currentRequest) {
+          setResult({ items: response.items, total: response.total });
+        }
+      } catch (error) {
+        if (requestId.current === currentRequest) {
+          setRequestError(error instanceof Error ? error.message : "Unable to load users.");
+          setResult({ items: [], total: 0 });
+        }
+      } finally {
+        if (requestId.current === currentRequest) setLoading(false);
+      }
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      if (requestId.current === currentRequest) requestId.current += 1;
+    };
+  }, [search, roleFilter, page, refreshToken]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return users.filter((u) => {
-      if (q && !u.name.toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
-      if (roleFilter !== "all" && u.role !== roleFilter) return false;
-      return true;
-    });
-  }, [users, search, roleFilter]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount);
-  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
   const hasFilters = search !== "" || roleFilter !== "all";
+  const refreshUsers = () => setRefreshToken((value) => value + 1);
 
   /* ----------------------------- dialog logic ----------------------------- */
 
@@ -141,8 +160,6 @@ export default function UserManagementPage() {
     if (!form.name.trim()) next.name = "Name is required.";
     if (!form.email.trim()) next.email = "Email is required.";
     else if (!EMAIL_RE.test(form.email.trim())) next.email = "Enter a valid email address.";
-    else if (!editing && users.some((u) => u.email.toLowerCase() === form.email.trim().toLowerCase()))
-      next.email = "This email is already registered.";
     if (next.name || next.email) {
       setErrors(next);
       return;
@@ -170,18 +187,24 @@ export default function UserManagementPage() {
       toast({ title: "User created", description: `${form.name.trim()} was added as ${ROLE_LABEL[form.role]}.` });
     }
     setDialogOpen(false);
+    refreshUsers();
     } catch (error) { setErrors({ save: error instanceof Error ? error.message : "Unable to save account" }); }
   }
 
-  function toggleStatus() {
+  async function toggleStatus() {
     if (!confirmTarget) return;
     const next = confirmTarget.status === "active" ? "inactive" : "active";
-    updateUser(confirmTarget.id, { status: next });
-    toast({
-      title: next === "active" ? "User activated" : "User deactivated",
-      description: `${confirmTarget.name} is now ${next}.`,
-    });
-    setConfirmTarget(null);
+    try {
+      await updateUser(confirmTarget.id, { status: next });
+      toast({
+        title: next === "active" ? "User activated" : "User deactivated",
+        description: `${confirmTarget.name} is now ${next}.`,
+      });
+      setConfirmTarget(null);
+      refreshUsers();
+    } catch (error) {
+      toast({ title: "Status update failed", description: error instanceof Error ? error.message : "Unable to update this account.", variant: "destructive" });
+    }
   }
 
   /* -------------------------------- render -------------------------------- */
@@ -191,21 +214,21 @@ export default function UserManagementPage() {
       <PageHeader
         title="User Management"
         subtitle="Create and manage administrator, trainer and student accounts."
-        actions={<div className="flex flex-wrap gap-2"><RegistrationButton role="student" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); }} /><RegistrationButton role="trainer" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); }} /></div>}
+        actions={<div className="flex flex-wrap gap-2"><RegistrationButton role="student" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); refreshUsers(); }} /><RegistrationButton role="trainer" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); refreshUsers(); }} /></div>}
       />
 
       {/* filters */}
       <div className="flex flex-col gap-2 md:flex-row md:items-center">
         <SearchInput
           value={search}
-          onChange={setSearch}
+          onChange={(value) => { setSearch(value); setPage(1); }}
           placeholder="Search by name or email…"
           className="w-full md:max-w-[380px] md:flex-1"
         />
         <div className="flex items-center gap-2">
           <FilterSelect
             value={roleFilter}
-            onChange={setRoleFilter}
+            onChange={(value) => { setRoleFilter(value); setPage(1); }}
             ariaLabel="Filter by role"
             options={[
               { label: "Administrator", value: "admin" },
@@ -223,6 +246,7 @@ export default function UserManagementPage() {
               onClick={() => {
                 setSearch("");
                 setRoleFilter("all");
+                setPage(1);
               }}
             >
               <RotateCcw className="size-3.5" /> Reset
@@ -238,7 +262,14 @@ export default function UserManagementPage() {
       <Card className="gap-0 overflow-hidden border-border bg-card p-0 shadow-none">
         {loading ? (
           <TableSkeleton rows={8} />
-        ) : paged.length === 0 ? (
+        ) : requestError ? (
+          <EmptyState
+            icon={Users}
+            title="Unable to load users"
+            description={requestError}
+            action={<Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={refreshUsers}>Retry</Button>}
+          />
+        ) : result.items.length === 0 ? (
           <EmptyState
             icon={Users}
             title="No users found"
@@ -252,6 +283,7 @@ export default function UserManagementPage() {
                   onClick={() => {
                     setSearch("");
                     setRoleFilter("all");
+                    setPage(1);
                       }}
                 >
                   <RotateCcw className="size-3.5" /> Reset filters
@@ -277,7 +309,7 @@ export default function UserManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {paged.map((u) => (
+                  {result.items.map((u) => (
                     <tr key={u.id} className="border-b border-border/50 transition-colors last:border-0 hover:bg-muted/60">
                       <td className="py-3 pl-5 pr-2">
                         <span className="flex items-center gap-2.5">
@@ -313,7 +345,7 @@ export default function UserManagementPage() {
                 </tbody>
               </table>
             </div>
-            <TablePagination page={safePage} pageCount={pageCount} total={filtered.length} onPageChange={setPage} />
+            <TablePagination page={page} pageCount={pageCount} total={result.total} onPageChange={setPage} />
           </>
         )}
       </Card>

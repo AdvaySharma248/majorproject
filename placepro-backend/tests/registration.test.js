@@ -14,7 +14,8 @@ test('admin registration, protected first login and password rotation', async t 
   try {
     await client.query(`CREATE SCHEMA ${schema}`);
     await client.query(`SET search_path TO ${schema}`);
-    await client.query(fs.readFileSync(path.join(__dirname,'../sql/schema.updated.sql'),'utf8').split('-- Migrate legacy enum-backed skills')[0]);
+    await client.query(fs.readFileSync(path.join(__dirname,'../sql/schema.updated.sql'),'utf8'));
+    await client.query(fs.readFileSync(path.join(__dirname,'../sql/migrations/20261121_batch_archive_metadata.sql'),'utf8'));
     const migration = fs.readFileSync(path.join(__dirname,'../sql/migrations/20261120_registration.sql'),'utf8');
     await client.query(migration); await client.query(migration);
     pool.query = (...args) => client.query(...args);
@@ -28,6 +29,7 @@ test('admin registration, protected first login and password rotation', async t 
     app.use('/api/v1',require('../src/services/admin/routes/admin.routes'));
     app.use('/api/v1',require('../src/services/students/routes/students.routes'));
     app.use('/api/v1',require('../src/services/companies/routes/companies.routes'));
+    app.use('/api/v1',require('../src/services/assessments/routes/assessments.routes'));
     app.use(require('../src/middleware/error.middleware').errorHandler);
     server=app.listen(0,'127.0.0.1'); await new Promise(resolve=>server.once('listening',resolve));
     const admin=jwt.sign({userId:1},process.env.JWT_SECRET || 'placepro-dev-secret');
@@ -73,6 +75,8 @@ test('admin registration, protected first login and password rotation', async t 
       assert.equal((await req('/auth/login','POST',{email:studentInput.email,password:'9876543210'},null)).status,401);
       assert.equal((await req('/auth/login','POST',{email:studentInput.email,password:'ChangedStudent123!'},null)).status,200);
       assert.equal((await req('/me/student','GET',undefined,changed.body.token)).status,200);
+      assert.equal((await req('/me/projects','GET',undefined,changed.body.token)).status,200);
+      assert.equal((await req('/me/profiles','GET',undefined,changed.body.token)).status,200);
       assert.equal((await req('/students','POST',studentInput,changed.body.token)).status,403);
       const changedTrainer=await req('/auth/change-password','POST',{currentPassword:'9123456789',newPassword:'ChangedTrainer123!'},trainerLogin.body.token);
       assert.equal(changedTrainer.status,200); assert.equal((await req('/batches','GET',undefined,changedTrainer.body.token)).status,200);
@@ -103,6 +107,33 @@ test('admin registration, protected first login and password rotation', async t 
       assert.equal((await client.query(`SELECT * FROM users WHERE email='rollback@test.invalid'`)).rowCount,0);
       assert.equal((await client.query(`SELECT * FROM students WHERE roll_no='ROLLBACK'`)).rowCount,0);
       await client.query(`DROP TRIGGER reject_registration_audit ON audit_logs`);
+    });
+    await t.test('assessment preview, approval identity checks and rollback preserve unrelated results',async()=>{
+      const skill=(await client.query(`INSERT INTO skill_taxonomy (skill_code,skill_name,domain_id) SELECT 'bulk_skill','Bulk skill',domain_id FROM evaluation_domains ORDER BY domain_id LIMIT 1 RETURNING skill_id`)).rows[0];
+      assert.equal((await req('/batches/1/archive','POST')).status,200);
+      const archivedForm=new FormData(); archivedForm.append('file',new Blob(['Roll,Score\n000123,80\n']),'archived.csv'); archivedForm.append('batchId','1'); archivedForm.append('name','Archived assessment');
+      const archivedPreview=await fetch(`http://127.0.0.1:${server.address().port}/api/v1/assessment-imports/preview`,{method:'POST',headers:{Authorization:`Bearer ${admin}`},body:archivedForm});
+      assert.equal(archivedPreview.status,400);
+      assert.equal((await req('/batches/1/restore','POST')).status,200);
+      const form=new FormData(); form.append('file',new Blob(['Roll,Score\n000123,80\nAPPROVALROW,90\n']),'assessment.csv');form.append('batchId','1');form.append('name','Workflow assessment');
+      const previewResponse=await fetch(`http://127.0.0.1:${server.address().port}/api/v1/assessment-imports/preview`,{method:'POST',headers:{Authorization:`Bearer ${admin}`},body:form});
+      assert.equal(previewResponse.status,201);const preview=await previewResponse.json();
+      const mapping={rollNumberColumn:0,skillColumns:[{skillId:String(skill.skill_id),columnIndex:1,maxMarks:100}]};
+      assert.equal((await req(`/assessment-imports/${preview.importId}/confirm`,'POST',{})).status,400);
+      assert.equal((await req(`/assessment-imports/${preview.importId}/confirm`,'POST',{...mapping,skillColumns:[{...mapping.skillColumns[0],skillId:'missing'}]})).status,422);
+      assert.equal((await req(`/assessment-imports/${preview.importId}/confirm`,'POST',mapping)).status,201);
+      assert.equal((await client.query('SELECT * FROM evaluation_records WHERE batch_id=$1',[preview.importId])).rowCount,1);
+      assert.equal((await req(`/assessment-imports/${preview.importId}/confirm`,'POST',mapping)).status,409);
+      const pending=(await client.query('SELECT * FROM import_student_reviews WHERE import_batch_id=$1',[preview.importId])).rows.find(r=>r.roll_no==='APPROVALROW');assert(pending);
+      await client.query(`INSERT INTO students (roll_no,full_name,email,academic_batch_id,section,cgpa) VALUES ('APPROVALROW','Expected Student','expected@test.invalid',1,'A',8)`);
+      assert.equal((await req(`/import-student-reviews/${pending.review_id}/approve`,'POST',{name:'Wrong Student',email:'wrong@test.invalid'})).status,409);
+      assert.equal((await req(`/import-student-reviews/${pending.review_id}/approve`,'POST',{name:'Expected Student',email:'expected@test.invalid'})).status,201);
+      const approved=(await client.query("SELECT * FROM students WHERE roll_no='APPROVALROW'")).rows[0];assert.equal(Number(approved.average_score),90);assert.equal(approved.user_id,null);
+      assert.equal((await req(`/assessments/${preview.importId}/rollback`,'POST',{})).status,200);
+      assert.equal((await client.query('SELECT * FROM evaluation_records WHERE batch_id=$1',[preview.importId])).rowCount,0);
+      assert.equal((await client.query("SELECT * FROM skill_ratings WHERE student_id=$1",[approved.student_id])).rowCount,0);
+      assert.equal((await client.query("SELECT * FROM evaluation_records WHERE overall_score_pct=81")).rowCount,1);
+      assert.equal((await client.query("SELECT * FROM students WHERE roll_no='APPROVALROW'")).rowCount,1);
     });
     await t.test('login attempts are rate limited',async()=>{
       let response;

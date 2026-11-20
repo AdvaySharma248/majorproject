@@ -223,14 +223,18 @@ export const api = {
   assessments: async () => pageItems(await request<{ items: Assessment[] }>("/assessments?pageSize=100")),
   assessment: (id: string) => request<Assessment>(`/assessments/${id}`),
   reviewAssessment: (id: string) => request<Assessment>(`/assessments/${id}`, json("PATCH", { reviewed: true })),
+  rollbackAssessment: (id: string) => request<{ id: string; rolledBack: boolean }>(`/assessments/${id}/rollback`, json("POST", {})),
   previewImport: (form: FormData) => request<ImportPreview>("/assessment-imports/preview", { method: "POST", body: form }),
   confirmImport: (id: string, payload: unknown) => request<Assessment>(`/assessment-imports/${id}/confirm`, json("POST", payload)),
   companies: async () => pageItems(await request<{ items: Company[] }>("/companies?pageSize=100")),
+  company: (id: string) => request<Company>(`/companies/${id}`),
   createCompany: (payload: Omit<Company, "id"> | Company) => request<Company>("/companies", json("POST", payload)),
   updateCompany: (id: string, payload: Partial<Company>) => request<Company>(`/companies/${id}`, json("PATCH", payload)),
   deleteCompany: (id: string) => request<void>(`/companies/${id}`, { method: "DELETE" }),
+  exportCompanyShortlist: (id: string, payload: unknown) =>
+    request<{ csv: string; fileName: string; rowCount: number }>(`/companies/${id}/shortlist-export`, json("POST", payload)),
   companyMatches: (id: string, payload: unknown) =>
-    request<{ items: MatchResult[]; page: number; pageSize: number; total: number }>(`/companies/${id}/matches`, json("POST", payload)),
+    request<{ items: MatchResult[]; page: number; pageSize: number; total: number; company: Company; requiresBatchConfiguration: boolean; matchingVersion: string }>(`/companies/${id}/matches`, json("POST", payload)),
   users: async (params: { q?: string; role?: Role; status?: "active" | "inactive"; page?: number; pageSize?: number } = {}) =>
     pageItems(await request<Paginated<AppUser>>("/users" + qs({ pageSize: 100, ...params }))),
   createUser: (payload: Partial<AppUser>) => request<AppUser>("/users", json("POST", payload)),

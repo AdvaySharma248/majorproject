@@ -82,6 +82,7 @@ interface AppState {
 
   importAssessment: (assessment: Assessment, source: ImportedSource) => void;
   markAssessmentReviewed: (id: string) => Promise<void>;
+  rollbackAssessment: (id: string) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -207,6 +208,11 @@ export const useAppStore = create<AppState>((set) => ({
   markAssessmentReviewed: async (id) => {
     await api.reviewAssessment(id);
     set((s) => ({ assessments: s.assessments.map((a) => a.id === id ? { ...a, reviewed: true } : a) }));
+  },
+  rollbackAssessment: async (id) => {
+    await api.rollbackAssessment(id);
+    set((s) => ({ assessments: s.assessments.filter((a) => a.id !== id) }));
+    await useAppStore.getState().refreshData();
   },
 }));
 

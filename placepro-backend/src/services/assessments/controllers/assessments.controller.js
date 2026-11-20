@@ -64,6 +64,7 @@ router.get("/assessments", requireAuth, requireRole(["admin", "trainer"]), async
         date: new Date(r.event_date).toISOString().slice(0, 10),
         uploadedBy: { id: String(r.uploaded_by || ""), name: r.uploader_name },
         reviewed: Boolean(r.reviewed),
+        canRollback: req.user.role === "admin" || String(r.uploaded_by) === String(req.user.id),
         sourceId: String(r.batch_id),
         evaluatedCount: Number(r.evaluated_count),
         averageScore: Number(r.average_score),
@@ -116,6 +117,7 @@ router.get("/assessments/:assessmentId", requireAuth, requireRole(["admin", "tra
       date: new Date(r.event_date).toISOString().slice(0, 10),
       uploadedBy: { id: String(r.uploaded_by || ""), name: r.uploader_name },
       reviewed: Boolean(r.reviewed),
+      canRollback: r.import_status === "CONFIRMED" && (req.user.role === "admin" || String(r.uploaded_by) === String(req.user.id)),
       sourceId: String(r.batch_id),
       results: resultsRes.rows.map((er) => ({
         studentId: String(er.student_id),
@@ -131,13 +133,56 @@ router.get("/assessments/:assessmentId", requireAuth, requireRole(["admin", "tra
   }
 });
 
+router.post("/assessments/:assessmentId/rollback", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
+  try {
+    await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `SELECT * FROM import_batches WHERE batch_id = $1 FOR UPDATE`,
+        [req.params.assessmentId]
+      );
+      const assessment = rows[0];
+      const fail = (statusCode, message) => { const error = new Error(message); error.statusCode = statusCode; throw error; };
+      if (!assessment) fail(404, "Assessment not found");
+      if (req.user.role !== "admin" && String(assessment.uploaded_by) !== String(req.user.id)) {
+        fail(403, "You can only roll back assessments you uploaded");
+      }
+      if (assessment.import_status !== "CONFIRMED") fail(409, "Assessment is no longer imported");
+
+      const affected = await client.query(
+        `SELECT DISTINCT student_id FROM evaluation_records WHERE batch_id = $1 ORDER BY student_id`,
+        [assessment.batch_id]
+      );
+      // Ratings belong to evaluation records and are removed by ON DELETE CASCADE.
+      await client.query(`DELETE FROM evaluation_records WHERE batch_id = $1`, [assessment.batch_id]);
+      await client.query(
+        `UPDATE import_student_reviews SET status = 'REJECTED', reviewed_by = $2,
+         reviewed_at = CURRENT_TIMESTAMP, rejection_reason = 'Assessment rolled back'
+         WHERE import_batch_id = $1 AND status = 'PENDING'`,
+        [assessment.batch_id, req.user.id]
+      );
+      await client.query(
+        `UPDATE import_batches SET import_status = 'PREVIEW', reviewed = FALSE, total_rows_processed = 0
+         WHERE batch_id = $1`, [assessment.batch_id]
+      );
+      for (const row of affected.rows) await recomputeAndSyncStudentReadiness(client, row.student_id);
+      await client.query(
+        `INSERT INTO audit_logs (actor_id, actor_name, module, action, status)
+         VALUES ($1, $2, 'Assessments', $3, 'warning')`,
+        [req.user.id, req.user.name, `Rolled back assessment ${assessment.batch_id}: ${assessment.event_title}`]
+      );
+    });
+    res.json({ id: req.params.assessmentId, rolledBack: true });
+  } catch (err) { next(err); }
+});
+
 router.patch("/assessments/:assessmentId", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
     const { reviewed } = req.body;
-    await pool.query(`UPDATE import_batches SET reviewed = $1 WHERE batch_id = $2`, [
+    const updated = await pool.query(`UPDATE import_batches SET reviewed = $1 WHERE batch_id = $2 AND import_status = 'CONFIRMED' RETURNING batch_id`, [
       Boolean(reviewed),
       req.params.assessmentId,
     ]);
+    if (!updated.rows.length) return res.status(409).json({ error: { code: "CONFLICT", message: "Assessment is no longer imported" } });
     await writeAuditLog(req.user.id, req.user.name, "Assessments", `Marked assessment ${req.params.assessmentId} reviewed=${reviewed}`);
     res.json({ id: req.params.assessmentId, reviewed: Boolean(reviewed) });
   } catch (err) {
@@ -319,6 +364,12 @@ router.post("/assessment-imports/:importId/confirm", requireAuth, requireRole(["
     }
 
     await withTransaction(async (client) => {
+      const locked = await client.query(`SELECT import_status FROM import_batches WHERE batch_id = $1 FOR UPDATE`, [imp.batch_id]);
+      if (locked.rows[0]?.import_status !== "PREVIEW") {
+        const error = new Error("Import has already been confirmed");
+        error.statusCode = 409;
+        throw error;
+      }
       await client.query(
         `UPDATE import_batches
          SET column_mapping_config = $1, import_status = 'CONFIRMED', total_rows_processed = $2

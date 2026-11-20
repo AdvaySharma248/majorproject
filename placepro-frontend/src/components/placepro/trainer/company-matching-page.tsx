@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -93,18 +93,6 @@ function criterionScore(student: Student, skillId: string) {
   return skillId === "PROJECT_SCORE" ? student.projectScore ?? 0 : student.scores[skillId] ?? 0;
 }
 
-const csvEscape = (v: string | number) => {
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
-const slugify = (s: string) =>
-  s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-
 export default function CompanyMatchingPage() {
   const { toast } = useToast();
   const companies = useAppStore((s) => s.companies);
@@ -120,6 +108,10 @@ export default function CompanyMatchingPage() {
     company ? fromCompany(company) : { minCgpa: 7, criteria: [] },
   );
 
+  const requestSequence = useRef(0);
+  const [exporting, setExporting] = useState(false);
+  const [matchingVersion, setMatchingVersion] = useState<string | null>(null);
+  const [matchedCompany, setMatchedCompany] = useState<Company | null>(null);
   const [results, setResults] = useState<MatchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,47 +123,57 @@ export default function CompanyMatchingPage() {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const fetchMatches = async (cid: string, state: CriteriaState) => {
-    if (!cid) return;
+  const fetchMatches = useCallback(async (cid: string, override?: CriteriaState) => {
+    if (!cid) return false;
+    const requestId = ++requestSequence.current;
     setLoading(true);
     setError(null);
+    setResults([]);
+    setSelected(new Set());
+    setMatchedCompany(null);
+    setMatchingVersion(null);
     try {
-      const res = await api.companyMatches(cid, {
-        criteriaOverride: {
-          minCgpa: state.minCgpa,
-          criteria: state.criteria,
-        },
-        page: 1,
-        pageSize: 1000,
-      });
-      setResults(res.items);
+      const saved = await api.company(cid);
+      if (requestId !== requestSequence.current) return false;
+      const state = override ?? fromCompany(saved);
+      if (!override) { setDraft(cloneState(state)); setApplied(cloneState(state)); }
+      const res = await api.companyMatches(cid, { criteriaOverride: state, page: 1, pageSize: 1000 });
+      const items = [...res.items];
+      for (let nextPage = 2; items.length < res.total; nextPage++) {
+        if (requestId !== requestSequence.current) return false;
+        const next = await api.companyMatches(cid, { criteriaOverride: state, page: nextPage, pageSize: res.pageSize });
+        if (next.matchingVersion !== res.matchingVersion) throw new Error("Company requirements changed. Please retry matching.");
+        if (!next.items.length) break;
+        items.push(...next.items);
+      }
+      if (requestId !== requestSequence.current) return false;
+      setResults(items);
+      setMatchedCompany(res.company);
+      setMatchingVersion(res.matchingVersion);
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load matches");
-      setResults([]);
+      if (requestId === requestSequence.current) setError(err instanceof Error ? err.message : "Failed to load matches");
+      return false;
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (company?.id) {
-      fetchMatches(company.id, applied);
-    }
-  }, [company?.id, applied]);
-
-  /* ------------------------- company selection ------------------------- */
+    if (company?.id) void fetchMatches(company.id);
+    return () => { requestSequence.current++; };
+  }, [company, fetchMatches]);
 
   const handleSelectCompany = (id: string) => {
-    if (id === companyId) return;
-    const next = companies.find((c) => c.id === id);
-    if (!next) return;
-    const fresh = fromCompany(next);
-    setCompanyId(next.id);
-    setDraft(fresh);
-    setApplied(cloneState(fresh));
+    if (id === company?.id) return;
+    requestSequence.current++;
+    setResults([]);
     setSelected(new Set());
+    setMatchedCompany(null);
+    setMatchingVersion(null);
+    setLoading(true);
+    setCompanyId(id);
     setPage(1);
-    fetchMatches(next.id, fresh);
   };
 
   /* --------------------------- evaluation ----------------------------- */
@@ -281,31 +283,17 @@ export default function CompanyMatchingPage() {
       criteria: d.criteria.map((c, i) => (i === index ? { ...c, ...patch } : c)),
     }));
 
-  const applyCriteria = () => {
+  const applyCriteria = async () => {
+    if (!company || loading) return;
     setApplied(cloneState(draft));
-    setSelected(new Set());
     setPage(1);
-    if (company?.id) {
-      fetchMatches(company.id, draft);
-    }
-    toast({
-      title: "Criteria applied",
-      description: `Eligibility and compatibility evaluated by server against ${company?.name ?? "this profile"}.`,
-    });
+    if (await fetchMatches(company.id, draft)) toast({ title: "Criteria applied", description: "Evaluated only students in the company's saved eligible batches." });
   };
 
-  const resetCriteria = () => {
-    if (!company) return;
-    const fresh = fromCompany(company);
-    setDraft(fresh);
-    setApplied(cloneState(fresh));
-    setSelected(new Set());
+  const resetCriteria = async () => {
+    if (!company || loading) return;
     setPage(1);
-    fetchMatches(company.id, fresh);
-    toast({
-      title: "Criteria reset to saved",
-      description: "Restored the profile configured by the administrator.",
-    });
+    if (await fetchMatches(company.id)) toast({ title: "Criteria reset to saved", description: "Restored saved requirements and eligible batches." });
   };
 
   /* ----------------------------- selection ----------------------------- */
@@ -335,47 +323,32 @@ export default function CompanyMatchingPage() {
 
   /* ------------------------------- export ------------------------------ */
 
-  const exportShortlist = () => {
-    if (!company) return;
-    const rows = eligibleResults.filter((r) => selected.has(r.student.id));
-    if (rows.length === 0) return;
-
-    const skillNames = applied.criteria.map((c) => criterionName(skills, c.skillId));
-    const header = [
-      "Rank",
-      "Roll Number",
-      "Name",
-      "CGPA",
-      ...skillNames,
-      "Compatibility %",
-    ];
-    const lines = [
-      header,
-      ...rows.map((r) => [
-        rankById.get(r.student.id) ?? "",
-        r.student.rollNumber,
-        r.student.name,
-        r.student.cgpa.toFixed(1),
-        ...applied.criteria.map((c) => String(criterionScore(r.student, c.skillId))),
-        r.compatibility.toFixed(1),
-      ]),
-    ];
-    const csv = lines.map((row) => row.map(csvEscape).join(",")).join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${slugify(company.name)}-${slugify(company.role)}-shortlist.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-
-    toast({
-      title: "Shortlist exported",
-      description: `${rows.length} candidates exported for ${company.name} — ${company.role}.`,
-    });
+  const exportShortlist = async () => {
+    if (!company || loading || error || exporting || !matchingVersion || matchedCompany?.id !== company.id) return;
+    if (selected.size === 0) {
+      toast({ title: "Select students first", description: "Select at least one eligible student to export a shortlist." });
+      return;
+    }
+    const requestId = requestSequence.current;
+    setExporting(true);
+    try {
+      const result = await api.exportCompanyShortlist(company.id, {
+        selectedStudentIds: [...selected], criteriaOverride: applied, matchingVersion,
+      });
+      if (requestId !== requestSequence.current) return;
+      const blob = new Blob([result.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast({ title: "Shortlist exported", description: `${result.rowCount} selected students exported for ${company.name}.` });
+    } catch (error) {
+      if (requestId === requestSequence.current) toast({ title: "Unable to export shortlist", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally { setExporting(false); }
   };
 
   /* ------------------------------- render ------------------------------ */
@@ -441,9 +414,16 @@ export default function CompanyMatchingPage() {
           })}
         </div>
         <p className="text-xs text-muted-foreground">
-          Demonstration profiles — configured by the administrator.
+          Company profiles configured by the administrator.
         </p>
       </section>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 text-sm">
+        <span className="font-medium">Eligible batches:</span>
+        {loading ? <span className="text-muted-foreground">Loading company requirements...</span> : error ? <span className="text-danger">Unable to load current requirements.</span> : matchedCompany?.eligibleBatches?.length ? matchedCompany.eligibleBatches.map(batch => (
+          <span key={batch.id} className="max-w-full break-words rounded-full bg-primary-soft px-2 py-0.5 text-xs text-primary">{batch.name}</span>
+        )) : <span className="text-warning">Ask an administrator to configure eligible batches. No students will be evaluated.</span>}
+      </div>
 
       {/* ------------------------- criteria panel ------------------------- */}
       <ChartCard
@@ -457,13 +437,13 @@ export default function CompanyMatchingPage() {
             <Input
               type="number"
               step={0.1}
-              min={5}
+              min={0}
               max={10}
               value={draft.minCgpa}
               onChange={(e) => {
                 const n = Number(e.target.value);
                 if (!Number.isNaN(n)) {
-                  setDraft((d) => ({ ...d, minCgpa: Math.min(10, Math.max(5, n)) }));
+                  setDraft((d) => ({ ...d, minCgpa: Math.min(10, Math.max(0, n)) }));
                 }
               }}
               aria-label="Minimum CGPA"
@@ -588,14 +568,14 @@ export default function CompanyMatchingPage() {
                 variant="ghost"
                 size="sm"
                 className="h-9 text-[13px]"
-                onClick={resetCriteria}
+                disabled={loading} onClick={() => void resetCriteria()}
               >
                 <RotateCcw className="size-3.5" /> Reset to saved
               </Button>
               <Button
                 size="sm"
                 className="h-9 bg-primary text-[13px] hover:bg-primary-hover"
-                onClick={applyCriteria}
+                disabled={loading} onClick={() => void applyCriteria()}
               >
                 Apply criteria
               </Button>
@@ -724,9 +704,9 @@ export default function CompanyMatchingPage() {
                 <Button
                   size="sm"
                   className="h-8 bg-primary text-[13px] hover:bg-primary-hover"
-                  onClick={exportShortlist}
+                  disabled={exporting || loading || !matchingVersion} onClick={() => void exportShortlist()}
                 >
-                  <Download className="size-3.5" /> Export shortlist
+                  <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export shortlist"}
                 </Button>
                 <Button
                   variant="ghost"
@@ -752,7 +732,7 @@ export default function CompanyMatchingPage() {
                 variant="outline"
                 size="sm"
                 className="mt-3 h-8 text-[13px]"
-                onClick={() => fetchMatches(companyId, applied)}
+                onClick={() => void fetchMatches(company.id, applied)}
               >
                 Retry matching
               </Button>
@@ -760,8 +740,8 @@ export default function CompanyMatchingPage() {
           ) : pageRows.length === 0 ? (
             <EmptyState
               icon={ListChecks}
-              title="No candidates match these filters"
-              description="Try clearing the search, switching the readiness filter, or relaxing the eligibility criteria."
+              title={!matchedCompany?.eligibleBatchIds?.length ? "Eligible batches need configuration" : results.length === 0 ? "No students in eligible batches" : "No candidates match these filters"}
+              description={!matchedCompany?.eligibleBatchIds?.length ? "Ask an administrator to edit this company and select at least one eligible batch." : results.length === 0 ? "The selected batches do not contain any students yet." : "Try clearing the search, switching the readiness filter, or relaxing the eligibility criteria."}
               action={
                 <Button
                   variant="outline"

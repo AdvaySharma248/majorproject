@@ -57,6 +57,7 @@ export default function AssessmentsPage() {
   const importedSources = useAppStore((s) => s.importedSources);
   const navigate = useAppStore((s) => s.navigate);
   const markAssessmentReviewed = useAppStore((s) => s.markAssessmentReviewed);
+  const rollbackAssessment = useAppStore((s) => s.rollbackAssessment);
 
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -67,6 +68,8 @@ export default function AssessmentsPage() {
   const [selected, setSelected] = useState<Assessment | null>(null);
   const [selectedDetails, setSelectedDetails] = useState<Assessment | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<Assessment | null>(null);
+  const [pendingAction, setPendingAction] = useState(false);
 
   /* simulated fetch so the table skeleton is visible */
   useEffect(() => {
@@ -152,12 +155,31 @@ export default function AssessmentsPage() {
       ? importedSources.find((s) => s.id === current.sourceId)
       : undefined;
 
-  const handleMarkReviewed = (a: Assessment) => {
-    markAssessmentReviewed(a.id);
-    toast({
+  const handleMarkReviewed = async (a: Assessment) => {
+    setPendingAction(true);
+    try {
+      await markAssessmentReviewed(a.id);
+      toast({
       title: "Assessment reviewed",
       description: `“${a.name}” results are approved and now count towards student profiles.`,
     });
+    } catch (error) {
+      toast({ title: "Unable to mark assessment reviewed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally { setPendingAction(false); }
+  };
+
+  const handleRollback = async () => {
+    if (!rollbackTarget || pendingAction) return;
+    setPendingAction(true);
+    try {
+      await rollbackAssessment(rollbackTarget.id);
+      setRollbackTarget(null);
+      setSelected(null);
+      setSelectedDetails(null);
+      toast({ title: "Assessment rolled back", description: "Imported results were removed and student scores recalculated. You can now upload a corrected spreadsheet." });
+    } catch (error) {
+      toast({ title: "Unable to roll back assessment", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally { setPendingAction(false); }
   };
 
   const openDetails = async (assessment: Assessment) => {
@@ -358,9 +380,15 @@ export default function AssessmentsPage() {
                                 variant="outline"
                                 size="sm"
                                 className="h-8 px-2.5 text-[13px]"
-                                onClick={() => handleMarkReviewed(a)}
+                                disabled={pendingAction}
+                                onClick={() => void handleMarkReviewed(a)}
                               >
                                 Mark reviewed
+                              </Button>
+                            )}
+                            {a.canRollback && (
+                              <Button variant="outline" size="sm" className="h-8 px-2.5 text-destructive" disabled={pendingAction} onClick={() => setRollbackTarget(a)}>
+                                <RotateCcw className="size-3.5" /> Roll back
                               </Button>
                             )}
                           </div>
@@ -476,11 +504,35 @@ export default function AssessmentsPage() {
                 </p>
               </div>
             )}
+            <div className="flex justify-end gap-2 border-t border-border/70 px-5 py-3">
+              {!current.reviewed && (
+                <Button size="sm" disabled={pendingAction} onClick={() => void handleMarkReviewed(current)}>Mark reviewed</Button>
+              )}
+              {current.canRollback && (
+                <Button variant="outline" size="sm" className="text-destructive" disabled={pendingAction} onClick={() => setRollbackTarget(current)}>
+                  <RotateCcw className="size-3.5" /> Roll back assessment
+                </Button>
+              )}
+            </div>
               </>
             )}
           </DialogContent>
         </Dialog>
       )}
+      <Dialog open={rollbackTarget !== null} onOpenChange={(open) => { if (!open && !pendingAction) setRollbackTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Roll back assessment?</DialogTitle>
+            <DialogDescription>
+              Rolling back "{rollbackTarget?.name}" removes its results and associated feedback from student profiles and recalculates their scores. Pending student verification requests will be cancelled. The original spreadsheet data is preserved. Upload a corrected spreadsheet to replace these results.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" disabled={pendingAction} onClick={() => setRollbackTarget(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={pendingAction} onClick={() => void handleRollback()}>{pendingAction ? "Rolling back..." : "Roll back assessment"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

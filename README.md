@@ -1,33 +1,71 @@
-# CSE Student Placement Intelligence System (Node.js + Express + PostgreSQL Prototype)
+# PlacePro Prototype
 
-This package contains the complete working prototype powered by **Node.js + Express** on the backend and **PostgreSQL relational tables + JSONB** on the database:
+PlacePro is a fullstack placement management prototype consisting of:
+- **Backend**: Express-based microservices architecture behind an API Gateway (`placepro-backend`).
+- **Frontend**: Next.js 16 (App Router), React 19, Tailwind CSS, Radix UI (`placepro-frontend`).
 
-1. **`db/`**: PostgreSQL schema migration and repeatable demo data seed, using `JSONB`.
-2. **`backend/`**: Node.js + Express REST API (`server.js`) using `pg`, `multer`, and `xlsx` (SheetJS) for unstructured Excel parsing, Dynamic Column Mapping, Student 360° aggregation, and Company Matching.
-3. **`frontend/index.html`**: Zero-build React 18 + Tailwind CSS frontend with all 3 portals (Trainer Portal, Student 360° Portal, Admin Portal).
-4. **`sample_excel_sheets/`**: Two unstructured Excel files (`sample_weekly_exam_messy.xlsx` and `sample_mock_interview_messy.xlsx`) with arbitrary extra columns to test your upload pipeline immediately.
+---
 
-## How to Run on Your PC in 3 Steps
+## Quick Start
 
-### Step 1: Create and Set Up the PostgreSQL Database
-Create an empty database:
+### 1. Start Both Services (Root)
+From the root directory, simply run:
 ```bash
-createdb placement_intelligence
+npm run dev
 ```
-Set `DB_HOST`, `DB_PORT` (default `5432`), `DB_USER`, `DB_PASSWORD`, and `DB_NAME` in `backend/.env`, or provide a `DATABASE_URL` connection string. The PostgreSQL user must have access to the database.
+This concurrently starts:
+- PlacePro Backend Gateway & Services on `http://localhost:5000`
+- PlacePro Next.js Frontend on `http://localhost:3000`
 
-### Step 2: Start the Node.js Backend
-Inside the `backend/` folder, install dependencies, apply the schema migration and sample data, then start the server:
-```bash
-cd backend
-npm install
-npm run db:setup
-npm start
+### 2. Run Independently
+To run individual services:
+- **Backend only**:
+  ```bash
+  npm run dev:backend
+  # or cd placepro-backend && npm run dev
+  ```
+- **Frontend only**:
+  ```bash
+  npm run dev:frontend
+  # or cd placepro-frontend && npm run dev
+  ```
+
+---
+
+## Service Architecture & Ports
+
+| Component | Port | Description |
+|-----------|------|-------------|
+| **Frontend** | 3000 | Next.js Web App (`http://localhost:3000`) |
+| **API Gateway** | 5000 | Gateway for all `/api/v1/*` routes |
+| Auth Service | 4001 | `/api/v1/auth/*` |
+| Dashboard Service | 4002 | `/api/v1/dashboard/*` |
+| Students Service | 4003 | `/api/v1/students/*`, `/api/v1/me/*` |
+| Assessments Service | 4004 | `/api/v1/assessments/*`, `/api/v1/assessment-imports/*` |
+| Companies Service | 4005 | `/api/v1/companies/*` |
+| Admin Service | 4006 | `/api/v1/users/*`, `/api/v1/batches/*`, `/api/v1/skills/*`, `/api/v1/audit-logs` |
+
+---
+
+## Environment Variables
+
+### Backend (`placepro-backend/.env`)
+```env
+PORT=5000
+GATEWAY_PORT=5000
+AUTH_SERVICE_PORT=4001
+DASHBOARD_SERVICE_PORT=4002
+STUDENTS_SERVICE_PORT=4003
+ASSESSMENTS_SERVICE_PORT=4004
+COMPANIES_SERVICE_PORT=4005
+ADMIN_SERVICE_PORT=4006
+DATABASE_URL=postgresql://postgres:rudra%2300@localhost:5432/placepro
+JWT_SECRET=placepro-super-secret-key
+FRONTEND_URL=http://localhost:3000
 ```
-Run `npm run db:migrate` to apply pending schema changes, or `npm run db:seed` to reapply the idempotent demo data seed.
-The migration runner records applied SQL and checksums; keep `db/schema.sql` immutable after it has been applied and add later changes as numbered `db/migrations/002_description.sql` files.
-The Node.js API will start at `http://localhost:8080`.
 
-### Step 3: Open the Frontend
-Simply double-click `frontend/index.html` in any browser (or serve it via VS Code Live Server / `python -m http.server 3000`).
-- Even before starting the backend, `frontend/index.html` loads in **Demo Mode** so you can click through the dashboards immediately. Once the Node.js server is running on `:8080`, the top status indicator turns **Green (Connected to Node.js + Express + PostgreSQL)**.
+### Frontend (`placepro-frontend/.env`)
+```env
+DATABASE_URL=file:/home/z/my-project/db/custom.db
+NEXT_PUBLIC_API_URL=http://localhost:5000/api/v1
+```

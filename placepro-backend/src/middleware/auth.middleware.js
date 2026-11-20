@@ -20,7 +20,7 @@ async function requireAuth(req, res, next) {
 
     const decoded = jwt.verify(token, JWT_SECRET);
     const { rows } = await pool.query(
-      `SELECT u.user_id, u.full_name, u.email, u.role, u.title, u.status, s.student_id
+      `SELECT u.user_id, u.full_name, u.email, u.role, u.title, u.status, u.must_change_password, u.auth_version, s.student_id
        FROM users u
        LEFT JOIN students s ON s.user_id = u.user_id OR s.email = u.email
        WHERE u.user_id = $1`,
@@ -35,12 +35,22 @@ async function requireAuth(req, res, next) {
     }
 
     const user = rows[0];
+    if (Number(decoded.authVersion ?? 0) !== Number(user.auth_version)) {
+      return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Please sign in again" } });
+    }
+    const passwordFlow = (req.method === "GET" && req.path === "/auth/me") ||
+      (req.method === "POST" && ["/auth/change-password", "/auth/logout"].includes(req.path));
+    if (user.must_change_password && !passwordFlow) {
+      return res.status(403).json({ error: { code: "PASSWORD_CHANGE_REQUIRED", message: "Change your temporary password before continuing" } });
+    }
     req.user = {
       id: Number(user.user_id),
       name: user.full_name,
       email: user.email,
       role: String(user.role).toLowerCase(),
       title: user.title || user.role,
+      mustChangePassword: Boolean(user.must_change_password),
+      authVersion: Number(user.auth_version),
       ...(user.student_id ? { studentId: String(user.student_id) } : {}),
     };
     next();

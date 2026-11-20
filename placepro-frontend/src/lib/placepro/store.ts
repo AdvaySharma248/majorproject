@@ -135,7 +135,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   refreshData: async () => {
     const user = useAppStore.getState().user;
-    if (!user) return;
+    if (!user || user.mustChangePassword) return;
     set({ isRefreshing: true, dataError: null });
     try {
       if (user.role === "student") {
@@ -194,7 +194,7 @@ export const useAppStore = create<AppState>((set) => ({
   deleteCompany: async (id) => { await api.deleteCompany(id); set((s) => ({ companies: s.companies.filter((c) => c.id !== id) })); },
 
   addUser: async (user) => { const created = await api.createUser(user); set((s) => ({ users: [created, ...s.users] })); },
-  updateUser: async (id, patch) => { const updated = await api.updateUser(id, patch); set((s) => ({ users: s.users.map((u) => u.id === id ? updated : u) })); },
+  updateUser: async (id, patch) => { const updated = await api.updateUser(id, patch); set((s) => ({ users: s.users.map((u) => u.id === id ? { ...u, ...updated } : u) })); },
 
   addBatch: async (batch) => { const created = await api.createBatch(batch); set((s) => ({ batches: [created, ...s.batches] })); },
   updateBatch: async (id, patch) => { const updated = await api.updateBatch(id, patch); set((s) => ({ batches: s.batches.map((b) => b.id === id ? { ...b, ...patch } : b) })); },

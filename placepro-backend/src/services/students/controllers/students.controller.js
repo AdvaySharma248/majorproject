@@ -5,7 +5,12 @@ const { requireAuth, requireRole } = require("../../../middleware/auth.middlewar
 const profileIntelligenceRouter = require("./profile-intelligence.controller");
 const projectsRouter = require("./projects.controller");
 
+const { registerAccount } = require("../../../utils/registration");
 const router = Router();
+router.post("/students", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+  try { res.status(201).json(await registerAccount(req.body, "STUDENT", req.user)); }
+  catch (error) { next(error); }
+});
 
 router.use(profileIntelligenceRouter);
 router.use(require("./github-preview.controller"));
@@ -136,7 +141,7 @@ router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (r
     p = Math.min(p, Math.max(1, Math.ceil(total / ps)));
     const offset = (p - 1) * ps;
     const rowsRes = await pool.query(
-      `SELECT s.* FROM students s
+      `SELECT s.*, u.mobile_number FROM students s LEFT JOIN users u ON u.user_id=s.user_id
        WHERE ${conditions.join(" AND ")}
        ORDER BY ${orderBy}, s.student_id ASC
        LIMIT $${params.length + 1} 
@@ -154,8 +159,7 @@ router.get("/students", requireAuth, requireRole(["admin", "trainer"]), async (r
 router.get("/students/:studentId", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * 
-       FROM students WHERE student_id = $1`,
+      `SELECT s.*, u.mobile_number FROM students s LEFT JOIN users u ON u.user_id=s.user_id WHERE student_id = $1`,
       [req.params.studentId]
     );
     if (!rows.length) {
@@ -250,7 +254,7 @@ router.get("/students/:studentId/feedback", requireAuth, requireRole(["admin", "
 router.get("/me/student", requireAuth, requireRole(["student"]), async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM students WHERE user_id = $1 OR email = $2`,
+      `SELECT s.*, u.mobile_number FROM students s LEFT JOIN users u ON u.user_id=s.user_id WHERE s.user_id = $1 OR s.email = $2`,
       [req.user.id, req.user.email]
     );
     if (!rows.length) {

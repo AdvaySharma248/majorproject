@@ -52,7 +52,8 @@ async function validateCriteria(db, cgpa, criteria) {
 
 // Filter by database batch IDs before loading scores. Three bulk queries, independent of student count.
 async function matchingStudents(db, batchIds) {
-  const { rows } = await db.query(`SELECT s.*, ab.name AS batch_name FROM students s
+  const { rows } = await db.query(`SELECT s.*, u.mobile_number, ab.name AS batch_name FROM students s
+    LEFT JOIN users u ON u.user_id=s.user_id
     JOIN academic_batches ab ON ab.academic_batch_id = s.academic_batch_id
     WHERE s.academic_batch_id = ANY($1::bigint[]) ORDER BY s.student_id`, [batchIds]);
   if (!rows.length) return [];
@@ -83,7 +84,7 @@ async function matchingStudents(db, batchIds) {
     const project = projectScores.get(String(s.student_id));
     return { id: String(s.student_id), name: s.full_name, rollNumber: s.roll_no, email: s.email,
       batchId: String(s.academic_batch_id), batch: s.batch_name, section: s.section ?? "",
-      mobileNumber: s.custom_profile_fields?.mobileNumber ?? s.custom_profile_fields?.mobile_number ?? "",
+      mobileNumber: s.mobile_number ?? s.custom_profile_fields?.mobileNumber ?? s.custom_profile_fields?.mobile_number ?? "",
       cgpa: Number(s.cgpa), scores: scores.get(String(s.student_id)) || {},
       average: Number(s.average_score), prStatus: s.readiness_status, trend: [],
       projectScore: project ? Number(project.project_score) : null, approvedProjectCount: project?.approved_count || 0,

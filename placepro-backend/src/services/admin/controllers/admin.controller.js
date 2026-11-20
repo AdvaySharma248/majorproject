@@ -4,7 +4,13 @@ const { pool, withTransaction, writeAuditLog } = require("../../../config/db");
 const { recomputeAndSyncStudentReadiness } = require("../../../utils/student-metrics");
 const { requireAuth, requireRole } = require("../../../middleware/auth.middleware");
 
+const { registerAccount } = require("../../../utils/registration");
 const router = Router();
+router.use(require("../registration-imports").router);
+router.post("/users/trainers", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+  try { res.status(201).json(await registerAccount(req.body, "TRAINER", req.user)); }
+  catch (error) { next(error); }
+});
 
 router.get("/users", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
@@ -25,7 +31,10 @@ router.get("/users", requireAuth, requireRole(["admin"]), async (req, res, next)
     const ps = Math.max(1, parseInt(pageSize, 10));
 
     const { rows } = await pool.query(
-      `SELECT *, COUNT(*) OVER() AS total_count FROM users
+      `SELECT *, (SELECT batch FROM students WHERE user_id=users.user_id) AS student_batch, COUNT(*) OVER() AS total_count,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', b.academic_batch_id::text, 'name', b.name) ORDER BY b.name)
+         FROM academic_batches b WHERE b.trainer_ids @> to_jsonb(ARRAY[users.user_id::text]) OR b.trainer_ids @> to_jsonb(ARRAY[users.user_id])), '[]'::jsonb) AS assigned_batches
+       FROM users
        WHERE ${conditions.join(" AND ")}
        ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, ps, (p - 1) * ps]
@@ -38,6 +47,9 @@ router.get("/users", requireAuth, requireRole(["admin"]), async (req, res, next)
         email: u.email,
         role: String(u.role).toLowerCase(),
         status: u.status,
+        mobileNumber: u.mobile_number ?? "",
+        assignedBatches: u.assigned_batches ?? [],
+        batch: u.student_batch ?? undefined,
       })),
       page: p,
       pageSize: ps,
@@ -51,11 +63,16 @@ router.get("/users", requireAuth, requireRole(["admin"]), async (req, res, next)
 router.post("/users", requireAuth, requireRole(["admin"]), async (req, res, next) => {
   try {
     const { name, email, role = "trainer", status = "active" } = req.body;
-    const defaultHash = await bcrypt.hash("secret", 10);
+    if (role === "trainer") return res.status(201).json(await registerAccount(req.body, "TRAINER", req.user));
+    if (role === "student") return res.status(201).json(await registerAccount(req.body, "STUDENT", req.user));
+    if (role !== "admin") return res.status(400).json({ error: { code: "VALIDATION", message: "Invalid role" } });
+    const { normalizeMobile } = require("../../../utils/registration");
+    const mobile = normalizeMobile(req.body.mobileNumber);
+    const defaultHash = await bcrypt.hash(mobile, 12);
     const { rows } = await pool.query(
-      `INSERT INTO users (full_name, email, password_hash, role, status)
-       VALUES ($1, $2, $3, $4::user_role, $5::account_status) RETURNING *`,
-      [name, email, defaultHash, String(role).toUpperCase(), status]
+      `INSERT INTO users (full_name, email, password_hash, role, status, mobile_number, must_change_password)
+       VALUES ($1, $2, $3, $4::user_role, $5::account_status, $6, TRUE) RETURNING *`,
+      [name, email.trim().toLowerCase(), defaultHash, String(role).toUpperCase(), status, mobile]
     );
     const u = rows[0];
     await writeAuditLog(req.user.id, req.user.name, "Users", `Created user ${email} (${role})`);

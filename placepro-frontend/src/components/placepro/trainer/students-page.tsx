@@ -9,6 +9,7 @@ import { useSubjectColumns } from "./use-subject-columns";
 import StudentFilterPanel from "./student-filter-panel";
 import { applyStudentFilters, readStudentFilters, studentFilterKeys, type StudentFilters } from "@/lib/placepro/student-filters";
 import type { Student } from "@/types";
+import RegistrationButton from "@/components/placepro/admin/registration-button";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { MiniBar, PRBadge } from "@/components/placepro/shared/badges";
 import { SearchInput, type FilterOption } from "@/components/placepro/shared/controls";
@@ -35,6 +36,7 @@ const DEFAULT_SORT = "name-asc";
 const VALID_SORTS = new Set(SORT_OPTIONS.map(option => option.value));
 
 export default function StudentsPage() {
+  const user = useAppStore(s => s.user);
   const navigate = useAppStore((s) => s.navigate);
   const batches = useAppStore((s) => s.batches);
   const columns = useSubjectColumns();
@@ -106,7 +108,7 @@ export default function StudentsPage() {
         title="Students"
         subtitle={`${result.total} matching students across ${batches.length} batches.`}
         actions={
-          <Button
+          user?.role === "admin" ? <RegistrationButton role="student" onRegistered={email => { router.push(`${pathname}?q=${encodeURIComponent(email)}&sort=${sort}`); setRetry(value => value + 1); }} /> : <Button
             variant="outline"
             size="sm"
             className="h-9 gap-1.5"
@@ -120,7 +122,7 @@ export default function StudentsPage() {
       <Card className="gap-0 border-border bg-card p-0 shadow-none">
         {/* filter toolbar */}
         <div className="flex flex-wrap items-center gap-3 border-b border-border/70 p-4 sm:p-5">
-          <SearchInput value={query} onChange={value => updateQuery("q", value)} placeholder="Search by name or roll number" className="min-w-[200px] flex-1 sm:max-w-md" />
+          <SearchInput value={query} onChange={value => updateQuery("q", value)} placeholder="Search by name, roll number or email" className="min-w-[200px] flex-1 sm:max-w-md" />
           <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
             <Select value={sort} onValueChange={value => updateQuery("sort", value)}>
               <SelectTrigger aria-label="Sort students" className="h-9 w-[195px] text-sm">
@@ -161,6 +163,7 @@ export default function StudentsPage() {
                   <tr className="border-b border-border/70 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <th className="py-2.5 pl-5 pr-2">Student</th>
                     <th className="px-2 py-2.5">Roll No</th>
+                    {user?.role === "admin" && <><th className="px-2 py-2.5">Email</th><th className="px-2 py-2.5">Mobile</th></>}
                     <th className="px-2 py-2.5">Batch</th>
                     <th className="px-2 py-2.5">CGPA</th>
                     {visible.map(subject => <th key={subject.id} className="whitespace-nowrap px-2 py-2.5">{subject.name}</th>)}
@@ -186,6 +189,7 @@ export default function StudentsPage() {
                         </span>
                       </td>
                       <td className="tabular px-2 py-2.5 text-[13px] text-muted-foreground">{r.rollNumber}</td>
+                      {user?.role === "admin" && <><td className="px-2 py-2.5">{r.email}</td><td className="px-2 py-2.5">{r.mobileNumber || "-"}</td></>}
                       <td className="px-2 py-2.5 text-[13px] text-muted-foreground">
                         <span className="whitespace-nowrap">
                           {r.batch.replace(" CSE", "")}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { RotateCcw, UserPlus, Users } from "lucide-react";
 import { useAppStore } from "@/lib/placepro/store";
 import type { AppUser, Role } from "@/types";
+import RegistrationButton from "./registration-button";
 import { PageHeader } from "@/components/placepro/shared/page-header";
 import { SearchInput, FilterSelect } from "@/components/placepro/shared/controls";
 import { StatusBadge } from "@/components/placepro/shared/badges";
@@ -61,6 +62,7 @@ const ROLE_TONE: Record<Role, "info" | "success" | "neutral"> = {
 };
 
 interface UserForm {
+  mobileNumber: string;
   name: string;
   email: string;
   role: Role;
@@ -68,7 +70,7 @@ interface UserForm {
   status: "active" | "inactive";
 }
 
-const EMPTY_FORM: UserForm = { name: "", email: "", role: "student", batch: "", status: "active" };
+const EMPTY_FORM: UserForm = { mobileNumber: "", name: "", email: "", role: "admin", batch: "", status: "active" };
 
 
 
@@ -89,7 +91,7 @@ export default function UserManagementPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AppUser | null>(null);
   const [form, setForm] = useState<UserForm>(EMPTY_FORM);
-  const [errors, setErrors] = useState<{ name?: string; email?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; email?: string; save?: string }>({});
   const [confirmTarget, setConfirmTarget] = useState<AppUser | null>(null);
 
   useEffect(() => {
@@ -123,6 +125,7 @@ export default function UserManagementPage() {
   function openEdit(u: AppUser) {
     setEditing(u);
     setForm({
+      mobileNumber: u.mobileNumber ?? "",
       name: u.name,
       email: u.email,
       role: u.role,
@@ -133,7 +136,7 @@ export default function UserManagementPage() {
     setDialogOpen(true);
   }
 
-  function saveUser() {
+  async function saveUser() {
     const next: { name?: string; email?: string } = {};
     if (!form.name.trim()) next.name = "Name is required.";
     if (!form.email.trim()) next.email = "Email is required.";
@@ -144,8 +147,9 @@ export default function UserManagementPage() {
       setErrors(next);
       return;
     }
+    try {
     if (editing) {
-      updateUser(editing.id, {
+      await updateUser(editing.id, {
         name: form.name.trim(),
         email: form.email.trim(),
         role: form.role,
@@ -154,7 +158,8 @@ export default function UserManagementPage() {
       });
       toast({ title: "User updated", description: `${form.name.trim()}'s account was saved successfully.` });
     } else {
-      addUser({
+      await addUser({
+        mobileNumber: form.mobileNumber,
         id: crypto.randomUUID(),
         name: form.name.trim(),
         email: form.email.trim(),
@@ -165,6 +170,7 @@ export default function UserManagementPage() {
       toast({ title: "User created", description: `${form.name.trim()} was added as ${ROLE_LABEL[form.role]}.` });
     }
     setDialogOpen(false);
+    } catch (error) { setErrors({ save: error instanceof Error ? error.message : "Unable to save account" }); }
   }
 
   function toggleStatus() {
@@ -185,6 +191,7 @@ export default function UserManagementPage() {
       <PageHeader
         title="User Management"
         subtitle="Create and manage administrator, trainer and student accounts."
+        actions={<div className="flex flex-wrap gap-2"><RegistrationButton role="student" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); }} /><RegistrationButton role="trainer" onRegistered={email => { setSearch(email); setRoleFilter("all"); setPage(1); }} /></div>}
       />
 
       {/* filters */}
@@ -264,6 +271,7 @@ export default function UserManagementPage() {
                   <tr className="border-b border-border/70 text-left text-xs text-muted-foreground">
                     <th className="py-2.5 pl-5 pr-2 font-medium">User</th>
                     <th className="px-2 py-2.5 font-medium">Role</th>
+                    <th className="px-2 py-2.5 font-medium">Mobile</th>
                     <th className="px-2 py-2.5 font-medium">Batch</th>
                     <th className="py-2.5 pl-2 pr-5 text-right font-medium">Actions</th>
                   </tr>
@@ -283,7 +291,8 @@ export default function UserManagementPage() {
                       <td className="px-2 py-3">
                         <StatusBadge tone={ROLE_TONE[u.role]}>{ROLE_LABEL[u.role]}</StatusBadge>
                       </td>
-                      <td className="px-2 py-3 text-[13px] text-muted-foreground">{u.role === "student" ? u.batch ?? "—" : "—"}</td>
+                      <td className="px-2 py-3 text-[13px] text-muted-foreground">{u.mobileNumber || "-"}</td>
+                      <td className="px-2 py-3 text-[13px] text-muted-foreground">{u.role === "trainer" ? u.assignedBatches?.map(b => b.name).join(", ") || "-" : u.batch || "-"}</td>
                       <td className="py-3 pl-2 pr-5">
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="sm" className="h-7 px-2 text-[13px] text-primary" onClick={() => openEdit(u)}>
@@ -319,6 +328,8 @@ export default function UserManagementPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
+            {!editing && <div className="space-y-1"><Label htmlFor="user-mobile">Mobile number (temporary password)</Label><Input id="user-mobile" type="tel" value={form.mobileNumber} onChange={e => setForm(f => ({ ...f, mobileNumber: e.target.value }))} /><p className="text-xs text-muted-foreground">Use Add Student or Add Trainer for batch-linked registration.</p></div>}
+            {errors.save && <p role="alert" className="text-sm text-destructive">{errors.save}</p>}
             <div className="grid gap-1.5">
               <Label htmlFor="user-name">Name</Label>
               <Input
@@ -349,8 +360,8 @@ export default function UserManagementPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">Administrator</SelectItem>
-                    <SelectItem value="trainer">Technical Trainer</SelectItem>
-                    <SelectItem value="student">Student</SelectItem>
+                    {editing && <SelectItem value="trainer">Technical Trainer</SelectItem>}
+                    {editing && <SelectItem value="student">Student</SelectItem>}
                   </SelectContent>
                 </Select>
               </div>

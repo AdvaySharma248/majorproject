@@ -162,6 +162,12 @@ export type ImportPreview = {
 };
 
 export const api = {
+  registrationTemplate: (kind: "students" | "trainers") => request<{ fileName: string; contentBase64: string }>(`/users/imports/${kind}/template`),
+  previewRegistrationImport: (kind: "students" | "trainers", form: FormData) => request<RegistrationImportResult>(`/users/imports/${kind}/preview`, { method: "POST", body: form }),
+  confirmRegistrationImport: (kind: "students" | "trainers", importId: string, mode: "valid-only" | "strict") => request<RegistrationImportResult>(`/users/imports/${kind}/confirm`, json("POST", { importId, mode })),
+  registerStudent: (payload: { name: string; email: string; mobileNumber: string; rollNumber: string; academicBatchId: string; section: string; cgpa?: number }) => request<{ studentId: string; userId: string }>("/students", json("POST", payload)),
+  registerTrainer: (payload: { name: string; email: string; mobileNumber: string; assignedBatchIds: string[] }) => request<{ userId: string }>("/users/trainers", json("POST", payload)),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ user: SessionUser }>("/auth/change-password", json("POST", { currentPassword, newPassword })),
   login: (email: string, password: string) => request<{ user: SessionUser }>("/auth/login", json("POST", { email, password })),
   me: () => request<{ user: SessionUser }>("/auth/me"),
   logout: () => request<void>("/auth/logout", json("POST")),
@@ -288,4 +294,14 @@ export type StudentVerificationRequest = {
   fileName: string;
   rawRow: Record<string, unknown>;
   status: "PENDING" | "APPROVED" | "REJECTED";
+};
+
+export type RegistrationImportResult = {
+  importId: string;
+  confirmed?: boolean;
+  rows: { rowNumber: number; submitted: Record<string,string>; status: string; message: string; linksExistingStudent?: boolean }[];
+  summary?: { total: number; valid: number; invalid: number; alreadyExists: number };
+  imported?: number;
+  skipped?: number;
+  errorReport: string;
 };

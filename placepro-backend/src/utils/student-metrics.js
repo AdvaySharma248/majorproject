@@ -125,6 +125,7 @@ async function buildStudentResponseObject(db, studentRow) {
     rollNumber: studentRow.roll_no,
     name: studentRow.full_name,
     email: studentRow.email,
+    mobileNumber: studentRow.mobile_number ?? "",
     batchId: studentRow.academic_batch_id ? String(studentRow.academic_batch_id) : studentRow.batch,
     batch: studentRow.batch,
     section: studentRow.section || "A",

@@ -1,7 +1,7 @@
 import type { AppUser, Assessment, AuditLog, Batch, Company, EvaluationDomain, MatchResult, Role, SessionUser, Skill, Student, TrainerFeedback } from "@/types";
 import { logger } from "@/lib/logger";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
+const API_BASE = (process.env.NEXTPUBLICAPI_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
 
 export type ApiErrorDetail = { field?: string; message: string; section?: string; count?: number; batchId?: string };
 

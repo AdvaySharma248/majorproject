@@ -13,6 +13,12 @@ const cookieOptions = {
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
+const clearCookieOptions = {
+  httpOnly: cookieOptions.httpOnly,
+  secure: cookieOptions.secure,
+  sameSite: cookieOptions.sameSite,
+  path: cookieOptions.path,
+};
 function session(res, u) {
   const token = jwt.sign({ userId: u.user_id, authVersion: Number(u.auth_version) }, JWT_SECRET, { expiresIn: "7d" });
   res.cookie("placepro_session", token, cookieOptions);
@@ -63,7 +69,7 @@ router.post("/auth/change-password", requireAuth, authRateLimit(), async (req, r
 router.post("/auth/logout", requireAuth, async (req, res, next) => {
   try {
     await writeAuditLog(req.user.id, req.user.name, "Auth", "User signed out", "success");
-    res.clearCookie("placepro_session", cookieOptions);
+    res.clearCookie("placepro_session", clearCookieOptions);
     res.status(204).send();
   } catch (error) { next(error); }
 });

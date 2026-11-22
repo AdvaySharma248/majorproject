@@ -3,7 +3,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { createProxy } = require("./proxy.middleware");
 const { errorHandler } = require("../middleware/error.middleware");
-const { getCorsOrigin } = require("../middleware/cors.middleware");
+const { getCorsOrigin, requireAllowedOrigin } = require("../middleware/cors.middleware");
 const { requestLogger } = require("../middleware/request-logger.middleware");
 
 const app = express();
@@ -15,10 +15,11 @@ app.use(
     credentials: true,
   })
 );
+app.use(requireAllowedOrigin);
 app.use(cookieParser());
 app.use(requestLogger("gateway"));
 
-app.get("/api", (_req, res) => res.status(200).json({ message: "Hello, world!" }));
+app.get("/api", (_req, res) => res.status(200).json({ status: "ok", service: "placepro-gateway" }));
 
 app.use("/api/v1/auth", createProxy(serviceUrl("AUTH", 4001)));
 app.use("/api/v1/dashboard", createProxy(serviceUrl("DASHBOARD", 4002)));

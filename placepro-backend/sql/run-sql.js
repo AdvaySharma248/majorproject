@@ -39,7 +39,7 @@ const sslEnabled =
 const client = databaseUrl
     ? new Client({
         connectionString: databaseUrl,
-        ssl: sslEnabled ? { rejectUnauthorized: false } : false,
+        ssl: sslEnabled ? { rejectUnauthorized: true } : false,
     })
     : new Client({
         host: process.env.DB_HOST,
@@ -47,7 +47,7 @@ const client = databaseUrl
         user: process.env.DB_USER || 'postgres',
         password: process.env.DB_PASSWORD || '',
         database: process.env.DB_NAME || 'postgres',
-        ssl: sslEnabled ? { rejectUnauthorized: false } : false,
+        ssl: sslEnabled ? { rejectUnauthorized: true } : false,
     });
 
 (async () => {

@@ -456,7 +456,6 @@ export default function ImportWorkflow() {
           const label = sheet.headers[c] || `Column ${c + 1}`;
           const raw = (row[c] ?? "").trim();
           const num = Number(raw);
-          console.log(`Row ${rowNo}, ${label}: raw="${raw}", num=${num}`);
           if (raw === "" || Number.isNaN(num)) {
             problem = `Missing or invalid score in “${label}”`;
             break;

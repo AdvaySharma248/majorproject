@@ -8,12 +8,24 @@ const { requireAuth, requireRole } = require("../../../middleware/auth.middlewar
 const router = Router();
 const trainerIdsOf = (value) => Array.isArray(value) ? value.map(String) : [];
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); //5mb
+const trainerAssessmentScope = (batchAlias, assessmentAlias, parameter) => `(
+  ${assessmentAlias}.uploaded_by = $${parameter} OR EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(
+      CASE WHEN jsonb_typeof(${batchAlias}.trainer_ids)='array' THEN ${batchAlias}.trainer_ids ELSE '[]'::jsonb END
+    ) trainer_id WHERE trainer_id = $${parameter}
+  )
+)`;
 
 router.get("/assessments", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
     const { q, type, batchId, month, page = "1", pageSize = "10" } = req.query;
     const conditions = ["ib.import_status = 'CONFIRMED'"];
     const params = [];
+
+    if (req.user.role === "trainer") {
+      params.push(String(req.user.id));
+      conditions.push(trainerAssessmentScope("ab", "ib", params.length));
+    }
 
     if (q) {
       params.push(`%${q}%`);
@@ -32,8 +44,9 @@ router.get("/assessments", requireAuth, requireRole(["admin", "trainer"]), async
       conditions.push(`TO_CHAR(ib.event_date, 'YYYY-MM') LIKE $${params.length}`);
     }
 
-    const p = Math.max(1, parseInt(page, 10));
-    const ps = Math.max(1, parseInt(pageSize, 10));
+    const parsedPage = Number(page);
+    const p = /^\d+$/.test(page) && Number.isSafeInteger(parsedPage) ? Math.max(1, parsedPage) : 1;
+    const ps = /^\d+$/.test(pageSize) ? Math.min(100, Math.max(1, Number(pageSize))) : 10;
 
     const { rows } = await pool.query(
       `SELECT ib.*, COALESCE(ab.name, 'Unassigned') AS batch_name,
@@ -81,6 +94,10 @@ router.get("/assessments", requireAuth, requireRole(["admin", "trainer"]), async
 
 router.get("/assessments/:assessmentId", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
+    const params = [req.params.assessmentId];
+    const access = req.user.role === "trainer"
+      ? (params.push(String(req.user.id)), `AND ${trainerAssessmentScope("ab", "ib", params.length)}`)
+      : "";
     const batchRes = await pool.query(
       `SELECT ib.*, COALESCE(ab.name, 'Unassigned') AS batch_name,
        COALESCE(u.full_name, 'Trainer') AS uploader_name
@@ -89,8 +106,8 @@ router.get("/assessments/:assessmentId", requireAuth, requireRole(["admin", "tra
          ON u.user_id = ib.uploaded_by
        LEFT JOIN academic_batches ab 
          ON ab.academic_batch_id = ib.academic_batch_id
-       WHERE ib.batch_id = $1`,
-      [req.params.assessmentId]
+        WHERE ib.batch_id = $1 ${access}`,
+      params
     );
 
     if (!batchRes.rows.length) {
@@ -179,13 +196,26 @@ router.post("/assessments/:assessmentId/rollback", requireAuth, requireRole(["ad
 router.patch("/assessments/:assessmentId", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {
   try {
     const { reviewed } = req.body;
-    const updated = await pool.query(`UPDATE import_batches SET reviewed = $1 WHERE batch_id = $2 AND import_status = 'CONFIRMED' RETURNING batch_id`, [
-      Boolean(reviewed),
-      req.params.assessmentId,
-    ]);
+    if (typeof reviewed !== "boolean") {
+      return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Reviewed must be a boolean" } });
+    }
+    const params = [reviewed, req.params.assessmentId];
+    const access = req.user.role === "trainer"
+      ? (params.push(String(req.user.id)), `AND (uploaded_by = $3 OR EXISTS (
+          SELECT 1 FROM academic_batches ab
+          WHERE ab.academic_batch_id = import_batches.academic_batch_id
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text(
+                CASE WHEN jsonb_typeof(ab.trainer_ids)='array' THEN ab.trainer_ids ELSE '[]'::jsonb END
+              ) trainer_id WHERE trainer_id = $3
+            )
+        ))`)
+      : "";
+    const updated = await pool.query(`UPDATE import_batches SET reviewed = $1
+      WHERE batch_id = $2 AND import_status = 'CONFIRMED' ${access} RETURNING batch_id`, params);
     if (!updated.rows.length) return res.status(409).json({ error: { code: "CONFLICT", message: "Assessment is no longer imported" } });
     await writeAuditLog(req.user.id, req.user.name, "Assessments", `Marked assessment ${req.params.assessmentId} reviewed=${reviewed}`);
-    res.json({ id: req.params.assessmentId, reviewed: Boolean(reviewed) });
+    res.json({ id: req.params.assessmentId, reviewed });
   } catch (err) {
     next(err);
   }
@@ -200,6 +230,9 @@ router.post("/assessment-imports/preview", requireAuth, requireRole(["admin", "t
     }
 
     const { name, type, batchId, date } = req.body;
+    if (!batchId) {
+      return res.status(400).json({ error: { code: "INVALID_BATCH", message: "Select an active batch" } });
+    }
     if (batchId) {
       const batch = await pool.query(
         `SELECT trainer_ids FROM academic_batches WHERE academic_batch_id::text=$1 AND status='active'`,
@@ -272,6 +305,9 @@ router.post("/assessment-imports/:importId/confirm", requireAuth, requireRole(["
     if (req.user.role !== 'admin' && String(imp.uploaded_by) !== String(req.user.id)) {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only confirm assessments you uploaded' } });
     }
+    if (!imp.academic_batch_id) {
+      return res.status(409).json({ error: { code: "BATCH_REQUIRED", message: "Upload the spreadsheet again and select an active batch" } });
+    }
     const headers = imp.headers;
     if (!Number.isInteger(rollNumberColumn) || rollNumberColumn < 0 || rollNumberColumn >= headers.length ||
         !Array.isArray(skillColumns) || !skillColumns.length || skillColumns.some(column => !column ||
@@ -304,7 +340,10 @@ router.post("/assessment-imports/:importId/confirm", requireAuth, requireRole(["
     if (issues.length) {
       return res.status(422).json({ error: { code: 'IMPORT_VALIDATION_FAILED', message: 'Spreadsheet contains validation errors', details: issues } });
     }
-    const studentRes = await pool.query(`SELECT student_id, roll_no FROM students`);
+    const studentRes = await pool.query(
+      `SELECT student_id, roll_no FROM students WHERE academic_batch_id = $1`,
+      [imp.academic_batch_id],
+    );
     const rollMap = new Map();
     for (const s of studentRes.rows) {
       rollMap.set(String(s.roll_no).toUpperCase(), Number(s.student_id));

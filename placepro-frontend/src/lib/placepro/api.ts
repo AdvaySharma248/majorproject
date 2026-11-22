@@ -2,6 +2,7 @@ import type { AppUser, Assessment, AuditLog, Batch, Company, EvaluationDomain, M
 import { logger } from "@/lib/logger";
 
 const API_BASE = (process.env.NEXTPUBLICAPI_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
+logger.warn("api.base_url", { url: API_BASE });
 
 export type ApiErrorDetail = { field?: string; message: string; section?: string; count?: number; batchId?: string };
 

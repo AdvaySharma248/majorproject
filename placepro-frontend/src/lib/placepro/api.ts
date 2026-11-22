@@ -1,7 +1,7 @@
 import type { AppUser, Assessment, AuditLog, Batch, Company, EvaluationDomain, MatchResult, Role, SessionUser, Skill, Student, TrainerFeedback } from "@/types";
 import { logger } from "@/lib/logger";
 
-const API_BASE = (process.env.BACKEND_URL ?? "http://localhost:5000/api/v1").replace(/\/$/, "");
+const API_BASE = process.env.BACKEND_URL;
 logger.warn("api.base_url", { url: API_BASE });
 console.log("API_BASE", API_BASE);
 

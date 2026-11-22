@@ -12,6 +12,20 @@ npm run dev
 
 Build with `npm run build`, then start the gateway and every service with `npm start`.
 
+## Database setup
+
+Set `DATABASE_URL` to a local PostgreSQL or Neon connection string, then initialize all schemas and migrations:
+
+```bash
+npm run db:init
+```
+
+The runner executes `sql/schema.updated.sql` followed by every SQL file in `sql/migrations/` in filename order. Demo and roster seed data is skipped by default. To include seeds:
+
+```bash
+RUN_SEEDS=true npm run db:init
+```
+
 ## Service layout
 
 ```

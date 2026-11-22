@@ -13,6 +13,7 @@ const servers = [
   "src/services/companies/server.js",
   "src/services/admin/server.js",
   "src/gateway/server.js",
+  "sql/run-sql.js",
 ];
 
 const children = servers.map((server) => fork(path.join(root, server), [], { stdio: "inherit", cwd: root }));

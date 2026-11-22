@@ -28,7 +28,12 @@ async function requireAuth(req, res, next) {
     );
 
     if (!rows.length || rows[0].status !== "active") {
-      res.clearCookie("placepro_session");
+      res.clearCookie("placepro_session", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        path: "/",
+      });
       return res.status(401).json({
         error: { code: "UNAUTHENTICATED", message: "Session invalid or user inactive" },
       });

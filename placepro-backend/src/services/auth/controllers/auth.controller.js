@@ -6,7 +6,13 @@ const { requireAuth } = require("../../../middleware/auth.middleware");
 const { authRateLimit } = require("../../../middleware/auth-rate-limit");
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "placepro-dev-secret";
-const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 7 * 24 * 60 * 60 * 1000 };
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
 function session(res, u) {
   const token = jwt.sign({ userId: u.user_id, authVersion: Number(u.auth_version) }, JWT_SECRET, { expiresIn: "7d" });
   res.cookie("placepro_session", token, cookieOptions);
@@ -57,7 +63,8 @@ router.post("/auth/change-password", requireAuth, authRateLimit(), async (req, r
 router.post("/auth/logout", requireAuth, async (req, res, next) => {
   try {
     await writeAuditLog(req.user.id, req.user.name, "Auth", "User signed out", "success");
-    res.clearCookie("placepro_session"); res.status(204).send();
+    res.clearCookie("placepro_session", cookieOptions);
+    res.status(204).send();
   } catch (error) { next(error); }
 });
 module.exports = router;

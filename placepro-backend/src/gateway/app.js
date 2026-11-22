@@ -3,6 +3,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { createProxy } = require("./proxy.middleware");
 const { errorHandler } = require("../middleware/error.middleware");
+const { getCorsOrigin } = require("../middleware/cors.middleware");
 const { requestLogger } = require("../middleware/request-logger.middleware");
 
 const app = express();
@@ -10,7 +11,7 @@ const serviceUrl = (name, fallbackPort) => process.env[`${name}_SERVICE_URL`] ||
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: getCorsOrigin,
     credentials: true,
   })
 );

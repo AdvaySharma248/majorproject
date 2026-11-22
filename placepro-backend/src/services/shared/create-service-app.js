@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { errorHandler } = require("../../middleware/error.middleware");
+const { getCorsOrigin } = require("../../middleware/cors.middleware");
 const { requestLogger } = require("../../middleware/request-logger.middleware");
 
 function createServiceApp(router, { name = "service" } = {}) {
@@ -9,7 +10,7 @@ function createServiceApp(router, { name = "service" } = {}) {
 
   app.use(
     cors({
-      origin: process.env.FRONTEND_URL || "http://localhost:3000",
+      origin: getCorsOrigin,
       credentials: true,
     })
   );
